@@ -1,0 +1,490 @@
+.appContainer {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+
+
+/* Main Content Area */
+.mainContent {
+  flex-grow: 1;
+  padding: 40px 80px;
+  overflow-y: auto;
+  background-color: var(--background-main);
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+.header h1 {
+  font-family: var(--font-serif);
+  font-size: 34px;
+  font-weight: 400;
+  color: var(--color-text-main);
+}
+
+/* KPI Summary Styling */
+.kpiRow {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+}
+
+.kpiCard {
+  background: var(--background-card);
+  border-radius: var(--border-radius-lg);
+  padding: 24px 28px;
+  box-shadow: var(--shadow-md);
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.kpiLabel {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  letter-spacing: 0.8px;
+}
+
+.kpiValueContainer {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.kpiValue {
+  font-family: var(--font-serif);
+  font-size: 38px;
+  color: var(--color-text-main);
+  line-height: 1;
+  font-weight: 500;
+}
+
+.kpiValueDivider {
+  font-size: 16px;
+  color: var(--color-text-muted);
+  font-family: var(--font-sans);
+  margin-left: 2px;
+  font-weight: 400;
+}
+
+.kpiTrend {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-muted);
+}
+
+.kpiSubtext {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.kpiUnderline {
+  position: absolute;
+  bottom: 0;
+  left: 28px;
+  right: 28px;
+  height: 1px;
+  background-color: var(--color-accent);
+  opacity: 0.7;
+}
+
+/* Grid layout for Dashboard widgets */
+.dashboardGrid {
+  display: grid;
+  grid-template-columns: 350px 1fr;
+  gap: 24px;
+  align-items: start;
+}
+
+.uploadPanelCard {
+  background: var(--background-card);
+  border-radius: var(--border-radius-lg);
+  padding: 28px;
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.tablePanelCard {
+  background: var(--background-card);
+  border-radius: var(--border-radius-lg);
+  padding: 28px;
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-height: 480px;
+}
+
+.panelTitle {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text-main);
+}
+
+.panelDescription {
+  font-size: 12.5px;
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+/* Drag and Drop Zone styling */
+.dropZone {
+  border: 1px dashed #d1cfca;
+  background-color: #faf9f6;
+  border-radius: var(--border-radius-md);
+  padding: 36px 16px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.dropZone:hover {
+  border-color: var(--color-accent);
+  background-color: var(--color-accent-transparent);
+}
+
+.dropZoneContent {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.dropZoneContent svg {
+  width: 32px;
+  height: 32px;
+  color: var(--color-text-muted);
+  margin-bottom: 4px;
+  transition: transform 0.2s ease;
+}
+
+.dropZone:hover .dropZoneContent svg {
+  color: var(--color-accent);
+  transform: translateY(-2px);
+}
+
+.dropZoneTitle {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-main);
+}
+
+.dropZoneSubtitle {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+/* Pipeline styling */
+.pipelineSection {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.pipelineTitle {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.pipelineSteps {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.pipelineStep {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--color-text-muted);
+  font-size: 12.5px;
+}
+
+.pipelineStepActive {
+  color: var(--color-text-main);
+  font-weight: 500;
+}
+
+.pipelineStepNumber {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid #d1cfca;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+}
+
+.pipelineStepActive .pipelineStepNumber {
+  border-color: var(--color-text-main);
+  background-color: var(--color-text-main);
+  color: #ffffff;
+}
+
+/* Table panel styling */
+.panelHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.exportButton {
+  background: transparent;
+  border: 1px solid #d1cfca;
+  border-radius: var(--border-radius-sm);
+  padding: 6px 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--color-text-main);
+  transition: all 0.2s ease;
+  font-weight: 500;
+}
+
+.exportButton:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background-color: var(--color-accent-transparent);
+}
+
+.exportButton svg {
+  width: 12px;
+  height: 12px;
+}
+
+.tableContainer {
+  overflow-x: auto;
+}
+
+.recentCallsTable {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 13px;
+}
+
+.recentCallsTable th {
+  padding: 12px 16px;
+  color: var(--color-text-muted);
+  font-weight: 500;
+  border-bottom: 1px solid #f0ede9;
+  font-size: 11.5px;
+  text-transform: capitalize;
+}
+
+.recentCallsTable td {
+  padding: 16px;
+  border-bottom: 1px solid #f0ede9;
+  color: var(--color-text-main);
+}
+
+.recentCallsTable tr {
+  transition: background-color 0.15s ease;
+}
+
+.recentCallsTable tbody tr:hover td {
+  background-color: #faf9f6;
+  cursor: pointer;
+}
+
+.recentCallsTable tr:last-child td {
+  border-bottom: none;
+}
+
+.callIdColumn {
+  color: var(--color-accent) !important;
+  font-weight: 500;
+}
+
+.agentColumn {
+  font-weight: 500;
+}
+
+.dateColumn {
+  color: var(--color-text-muted);
+}
+
+.durationColumn {
+  color: var(--color-text-main);
+}
+
+.statusBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+  font-size: 12px;
+}
+
+.statusDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.statusReviewed {
+  color: var(--color-success);
+}
+
+.statusReviewed .statusDot {
+  background-color: var(--color-success);
+}
+
+.statusPending {
+  color: var(--color-warning);
+}
+
+.statusPending .statusDot {
+  background-color: var(--color-warning);
+}
+
+.statusFlagged {
+  color: var(--color-danger);
+}
+
+.statusFlagged .statusDot {
+  background-color: var(--color-danger);
+}
+
+/* Upload & Drag Interactions */
+.dropZoneDragging {
+  border-color: var(--color-accent) !important;
+  background-color: var(--color-accent-transparent) !important;
+}
+
+.dropZoneProcessing {
+  border-color: #d1cfca;
+  background-color: #faf9f6;
+  opacity: 0.9;
+  cursor: default;
+  pointer-events: none;
+}
+
+.uploadProgressTrack {
+  width: 160px;
+  height: 4px;
+  background-color: #eae7e1;
+  border-radius: 2px;
+  margin-top: 12px;
+  overflow: hidden;
+  position: relative;
+}
+
+.uploadProgressBar {
+  height: 100%;
+  background-color: var(--color-accent);
+  transition: width 0.1s linear;
+}
+
+.pipelineStepCompleted {
+  color: var(--color-text-main);
+}
+
+.pipelineStepCompleted .pipelineStepNumber {
+  border-color: var(--color-success);
+  background-color: var(--color-success);
+  color: #ffffff;
+}
+
+/* Upload Queue Styling */
+.queueContainer {
+  margin-top: 18px;
+  border-top: 1px solid #f0ede9;
+  padding-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.queueTitle {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.queueList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.queueItem {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background-color: #faf9f6;
+  border-radius: var(--border-radius-sm);
+  border: 1px solid #f0ede9;
+  font-size: 11.5px;
+  transition: all 0.2s ease;
+}
+
+.queueItemActive {
+  border-color: var(--color-accent);
+  background-color: var(--color-accent-transparent);
+  font-weight: 500;
+}
+
+.queueItemDone {
+  border-color: rgba(16, 185, 129, 0.2);
+  background-color: rgba(16, 185, 129, 0.05);
+}
+
+.queueItemFailed {
+  border-color: rgba(239, 68, 68, 0.2);
+  background-color: rgba(239, 68, 68, 0.05);
+}
+
+.queueFileName {
+  color: var(--color-text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 170px;
+}
+
+.queueStatus {
+  font-weight: 600;
+  font-size: 10.5px;
+}
+
+.status_pending {
+  color: var(--color-text-muted);
+}
+
+.status_processing {
+  color: var(--color-accent);
+}
+
+.status_done {
+  color: var(--color-success);
+}
+
+.status_failed {
+  color: var(--color-danger);
+}
+

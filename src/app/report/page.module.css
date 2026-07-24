@@ -1,0 +1,981 @@
+.appContainer {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+/* Main Content Area */
+.mainContent {
+  flex-grow: 1;
+  padding: 40px 200px;
+  overflow-y: auto;
+  background-color: var(--background-main);
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  height: 100vh;
+}
+
+.header h1 {
+  font-family: var(--font-serif);
+  font-size: 34px;
+  font-weight: 400;
+  color: var(--color-text-main);
+}
+
+/* KPI Summary Styling */
+.kpiGrid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px;
+  flex-shrink: 0;
+}
+
+.kpiCard {
+  background: var(--background-card);
+  border-radius: var(--border-radius-lg);
+  padding: 24px;
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  position: relative;
+  border: 2px solid transparent;
+  transition: all 0.2s ease;
+}
+
+.kpiCardBlueHighlight {
+  border-color: #0070f3;
+  box-shadow: 0 4px 20px -2px rgba(0, 112, 243, 0.08), 0 2px 8px -1px rgba(0, 112, 243, 0.04);
+}
+
+.kpiLabel {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  letter-spacing: 0.5px;
+}
+
+.kpiValue {
+  font-family: var(--font-serif);
+  font-size: 34px;
+  color: var(--color-text-main);
+  font-weight: 500;
+  line-height: 1;
+}
+
+.kpiSubtext {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+/* Charts Section */
+.chartsGrid {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr;
+  gap: 24px;
+  align-items: start;
+  flex-shrink: 0;
+}
+
+.chartCard {
+  background: var(--background-card);
+  border-radius: var(--border-radius-lg);
+  padding: 28px;
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.chartTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-main);
+}
+
+/* Daily QA CSS Bar Chart */
+.barChartContainer {
+  display: flex;
+  gap: 16px;
+  height: 220px;
+  margin-top: 8px;
+}
+
+.yAxis {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-end;
+  color: var(--color-text-muted);
+  font-size: 10px;
+  font-weight: 500;
+  width: 24px;
+  flex-shrink: 0;
+  padding-bottom: 24px;
+}
+
+.barsContainer {
+  display: flex;
+  justify-content: space-between;
+  flex-grow: 1;
+  height: 100%;
+  border-bottom: 1px solid #f0ede9;
+  padding: 0 8px;
+}
+
+.barColumn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+  flex-grow: 1;
+}
+
+.barTrack {
+  flex-grow: 1;
+  width: 24px;
+  background-color: transparent;
+  display: flex;
+  align-items: flex-end;
+  position: relative;
+}
+
+.barFill {
+  width: 100%;
+  background-color: var(--color-accent);
+  border-radius: 4px 4px 0 0;
+  transition: height 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.barLabel {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  font-weight: 500;
+  text-align: center;
+  width: 36px;
+  flex-shrink: 0;
+}
+
+/* Donut Chart Styling */
+.donutContainer {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  height: 220px;
+  justify-content: center;
+}
+
+.donutChart {
+  width: 140px;
+  height: 140px;
+  border-radius: 50%;
+  background: conic-gradient(
+    var(--color-accent) 0% 58%,
+    #2b2825 58% 92%,
+    #eae7e1 92% 100%
+  );
+  position: relative;
+  flex-shrink: 0;
+  box-shadow: var(--shadow-sm);
+}
+
+.donutChart::after {
+  content: "";
+  position: absolute;
+  top: 25px;
+  left: 25px;
+  width: 90px;
+  height: 90px;
+  background-color: var(--background-card);
+  border-radius: 50%;
+}
+
+.donutLegend {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex-grow: 1;
+}
+
+.legendRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.legendLabelContainer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.legendDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.legendDotAgent {
+  background-color: var(--color-accent);
+}
+
+.legendDotCustomer {
+  background-color: #2b2825;
+}
+
+.legendDotSilence {
+  background-color: #eae7e1;
+}
+
+.legendLabelText {
+  color: var(--color-text-muted);
+}
+
+.legendValue {
+  color: var(--color-text-main);
+  font-weight: 600;
+}
+
+/* Recent Calls Section Styling */
+.recentCallsSection {
+  background: var(--background-card);
+  border-radius: var(--border-radius-lg);
+  padding: 28px;
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.tableHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.tableHeader h2 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text-main);
+}
+
+.filterControls {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.datePickerRange {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dateInputWrapper {
+  background: #faf9f6;
+  border: 1px solid #f0ede9;
+  border-radius: var(--border-radius-md);
+  padding: 5px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+}
+
+.dateInputWrapper:hover {
+  background-color: #eae7e1;
+  border-color: #d1cfca;
+}
+
+.dateInputWrapper:focus-within {
+  border-color: var(--color-accent);
+}
+
+.dateInput {
+  background: transparent;
+  border: none;
+  outline: none;
+  font-size: 11.5px;
+  color: var(--color-text-main);
+  font-family: var(--font-sans);
+  cursor: pointer;
+}
+
+.filterIcon {
+  width: 12px;
+  height: 12px;
+  color: var(--color-text-muted);
+}
+
+.arrowIcon {
+  width: 12px;
+  height: 12px;
+  color: var(--color-text-muted);
+}
+
+.searchBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #faf9f6;
+  border: 1px solid #f0ede9;
+  border-radius: var(--border-radius-md);
+  padding: 6px 12px;
+  min-width: 200px;
+  transition: border-color 0.2s ease;
+}
+
+.searchBar:focus-within {
+  border-color: var(--color-accent);
+}
+
+.searchIcon {
+  width: 14px;
+  height: 14px;
+  color: var(--color-text-muted);
+}
+
+.searchInput {
+  background: transparent;
+  border: none;
+  outline: none;
+  font-size: 11.5px;
+  color: var(--color-text-main);
+  width: 100%;
+  font-family: var(--font-sans);
+}
+
+.searchInput::placeholder {
+  color: var(--color-text-muted);
+}
+
+/* Table styling */
+.tableContainer {
+  overflow-x: auto;
+}
+
+.recentCallsTable {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 13px;
+}
+
+.recentCallsTable th {
+  padding: 12px 16px;
+  color: var(--color-text-muted);
+  font-weight: 500;
+  border-bottom: 1px solid #f0ede9;
+  font-size: 11.5px;
+  text-transform: capitalize;
+}
+
+.recentCallsTable td {
+  padding: 16px;
+  border-bottom: 1px solid #f0ede9;
+  color: var(--color-text-main);
+}
+
+.recentCallsTable tr {
+  transition: background-color 0.15s ease;
+}
+
+.recentCallsTable tbody tr:hover td {
+  background-color: #faf9f6;
+  cursor: pointer;
+}
+
+.recentCallsTable tr:last-child td {
+  border-bottom: none;
+}
+
+.exportHeaderColumn {
+  text-align: right;
+}
+
+.exportLinkBtn {
+  background: transparent;
+  border: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+  transition: color 0.2s ease;
+  font-weight: 500;
+}
+
+.exportLinkBtn:hover {
+  color: var(--color-accent);
+}
+
+.tableExportIcon {
+  width: 12px;
+  height: 12px;
+}
+
+.callIdColumn {
+  color: var(--color-accent) !important;
+  font-weight: 500;
+}
+
+.agentColumn {
+  font-weight: 500;
+}
+
+.dateColumn {
+  color: var(--color-text-muted);
+}
+
+.durationColumn {
+  color: var(--color-text-main);
+}
+
+.scoreColumn {
+  font-weight: 600;
+}
+
+.scoreGreen {
+  color: var(--color-success);
+}
+
+.scoreOrange {
+  color: var(--color-warning);
+}
+
+.scoreRed {
+  color: var(--color-danger);
+}
+
+.statusBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+  font-size: 12px;
+}
+
+.statusDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.statusReviewed {
+  color: var(--color-success);
+}
+
+.statusReviewed .statusDot {
+  background-color: var(--color-success);
+}
+
+.statusPending {
+  color: var(--color-warning);
+}
+
+.statusPending .statusDot {
+  background-color: var(--color-warning);
+}
+
+.statusFlagged {
+  color: var(--color-danger);
+}
+
+.statusFlagged .statusDot {
+  background-color: var(--color-danger);
+}
+
+/* Launch Button next to Search */
+.launchBtn {
+  background-color: var(--background-card);
+  border: 1px solid #f0ede9;
+  border-radius: var(--border-radius-md);
+  padding: 6px 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 11.5px;
+  color: var(--color-text-main);
+  font-weight: 500;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  font-family: var(--font-sans);
+}
+
+.launchBtn:hover {
+  background-color: #faf9f6;
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.noCallsText {
+  text-align: center;
+  color: var(--color-text-muted);
+  padding: 32px !important;
+}
+
+/* Sliding Drawer Panel */
+.drawerOverlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(30, 27, 24, 0.4);
+  backdrop-filter: blur(4px);
+  z-index: 100;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.drawerPanel {
+  width: 480px;
+  height: 100vh;
+  background-color: var(--background-card);
+  box-shadow: -4px 0 32px rgba(27, 25, 23, 0.12);
+  display: flex;
+  flex-direction: column;
+  z-index: 101;
+  animation: slideIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+/* Header */
+.drawerHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 24px 28px;
+  border-bottom: 1px solid #f5f3ef;
+  flex-shrink: 0;
+}
+
+.drawerTitle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.drawerTitleIcon {
+  color: var(--color-accent);
+}
+
+.drawerTitle h2 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-text-main);
+  letter-spacing: -0.2px;
+}
+
+.drawerCloseBtn {
+  background: transparent;
+  border: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.drawerCloseBtn:hover {
+  background-color: #f5f3ef;
+  color: var(--color-text-main);
+}
+
+/* Scrollable Content */
+.drawerContent {
+  flex-grow: 1;
+  overflow-y: auto;
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+/* Scrollbar styling for drawer */
+.drawerContent::-webkit-scrollbar {
+  width: 4px;
+}
+
+.drawerContent::-webkit-scrollbar-thumb {
+  background: #eae7e1;
+  border-radius: 2px;
+}
+
+.panelSection {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.sectionTitle {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  border-left: 2px solid var(--color-accent);
+  padding-left: 8px;
+  line-height: 1;
+}
+
+/* Briefing Stats */
+.briefGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.briefCard {
+  background-color: #faf9f6;
+  border: 1px solid #f0ede9;
+  border-radius: var(--border-radius-md);
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.briefLabel {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.briefVal {
+  font-family: var(--font-serif);
+  font-size: 20px;
+  font-weight: 500;
+  color: var(--color-text-main);
+}
+
+.briefTotal {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--color-text-muted);
+  font-weight: 400;
+}
+
+/* Filters */
+.filterGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.filterGroup:last-child {
+  margin-bottom: 0;
+}
+
+.filterLabel {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-main);
+}
+
+.agentPills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agentPill {
+  background-color: #faf9f6;
+  border: 1px solid #f0ede9;
+  border-radius: 20px;
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-main);
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  font-family: var(--font-sans);
+}
+
+.agentPill:hover {
+  border-color: #d1cfca;
+  background-color: #eae7e1;
+}
+
+.activePill {
+  background-color: var(--color-accent) !important;
+  color: #ffffff !important;
+  border-color: var(--color-accent) !important;
+  box-shadow: 0 2px 8px rgba(208, 90, 68, 0.2);
+}
+
+/* Custom Checkbox styles */
+.statusGroup {
+  display: flex;
+  gap: 16px;
+}
+
+.checkboxLabel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  position: relative;
+  user-select: none;
+}
+
+.realCheckbox {
+  position: absolute;
+  opacity: 0;
+  cursor: pointer;
+  height: 0;
+  width: 0;
+}
+
+.customCheckbox {
+  height: 16px;
+  width: 16px;
+  background-color: #faf9f6;
+  border: 1px solid #f0ede9;
+  border-radius: 4px;
+  display: inline-block;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.checkboxLabel:hover .realCheckbox ~ .customCheckbox {
+  border-color: #d1cfca;
+}
+
+.realCheckbox:checked ~ .customCheckbox {
+  background-color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.customCheckbox:after {
+  content: "";
+  position: absolute;
+  display: none;
+  left: 5px;
+  top: 2px;
+  width: 4px;
+  height: 8px;
+  border: solid white;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.realCheckbox:checked ~ .customCheckbox:after {
+  display: block;
+}
+
+.checkboxText {
+  font-size: 11px;
+  color: var(--color-text-main);
+  font-weight: 500;
+}
+
+/* Range Slider */
+.sliderLabelRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.sliderVal {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-accent);
+}
+
+.scoreSlider {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: #faf9f6;
+  border: 1px solid #f0ede9;
+  outline: none;
+  margin: 6px 0;
+}
+
+.scoreSlider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(27, 25, 23, 0.15);
+  transition: transform 0.1s ease;
+}
+
+.scoreSlider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+/* Chart 1: Sentiment */
+.sentimentChartContainer {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.stackedBar {
+  display: flex;
+  height: 16px;
+  width: 100%;
+  border-radius: 8px;
+  overflow: hidden;
+  background-color: #f5f3ef;
+}
+
+.segmentPositive {
+  height: 100%;
+  background-color: var(--color-success);
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.segmentNeutral {
+  height: 100%;
+  background-color: var(--color-warning);
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.segmentNegative {
+  height: 100%;
+  background-color: var(--color-danger);
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sentimentLegend {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.legendDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.dotPositive {
+  background-color: var(--color-success);
+}
+
+.dotNeutral {
+  background-color: var(--color-warning);
+}
+
+.dotNegative {
+  background-color: var(--color-danger);
+}
+
+/* Chart 2: Sparkline Curve */
+.sparklineCard {
+  background-color: #faf9f6;
+  border: 1px solid #f0ede9;
+  border-radius: var(--border-radius-md);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sparklineWrapper {
+  height: 60px;
+  width: 100%;
+  position: relative;
+}
+
+.sparklineSvg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.sparklineLabels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+/* Chart 3: Category Distrib */
+.catDistribution {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.catRow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.catLabelRow {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+}
+
+.catName {
+  font-weight: 500;
+  color: var(--color-text-main);
+}
+
+.catValText {
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.catBarTrack {
+  height: 6px;
+  width: 100%;
+  background-color: #f5f3ef;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.catBarFill {
+  height: 100%;
+  background-color: var(--color-accent);
+  border-radius: 3px;
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.noDataPlaceholder {
+  text-align: center;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  padding: 24px 0;
+}
+

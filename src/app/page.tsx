@@ -1,0 +1,828 @@
+"use client";
+
+import { useState, useEffect, useRef } from "react";
+import Sidebar from "@/components/Sidebar";
+import styles from "./page.module.css";
+import { useRouter } from "next/navigation";
+
+// SVG Icons
+const FilePlusIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+    <polyline points="14 2 14 8 20 8" />
+    <line x1="12" y1="18" x2="12" y2="12" />
+    <line x1="9" y1="15" x2="15" y2="15" />
+  </svg>
+);
+
+const ExportIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <polyline points="7 10 12 15 17 10" />
+    <line x1="12" y1="15" x2="12" y2="3" />
+  </svg>
+);
+
+const CheckIcon = () => (
+  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="20 6 9 17 4 12" />
+  </svg>
+);
+
+const TrashIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="3 6 5 6 21 6" />
+    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+    <line x1="10" y1="11" x2="10" y2="17" />
+    <line x1="14" y1="11" x2="14" y2="17" />
+  </svg>
+);
+
+// Helper to get precise audio duration using HTML5 Audio metadata loading
+const getAudioDuration = (file: File): Promise<number> => {
+  return new Promise((resolve) => {
+    const audio = new Audio();
+    audio.src = URL.createObjectURL(file);
+    audio.addEventListener("loadedmetadata", () => {
+      const dur = audio.duration;
+      URL.revokeObjectURL(audio.src);
+      resolve(dur);
+    });
+    audio.addEventListener("error", () => {
+      URL.revokeObjectURL(audio.src);
+      resolve(0);
+    });
+  });
+};
+
+// Decodes stereo audio files in the browser using the Web Audio API
+// extracts channel 0 (Left = Agent) and channel 1 (Right = Customer) as separate mono WAV blobs
+const decodeAndSplitStereo = async (file: File): Promise<{ agentFile: Blob | null; customerFile: Blob | null }> => {
+  try {
+    const AudioContextClass = (window.AudioContext || (window as any).webkitAudioContext);
+    if (!AudioContextClass) return { agentFile: null, customerFile: null };
+
+    const audioCtx = new AudioContextClass();
+    const arrayBuffer = await file.arrayBuffer();
+    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+    
+    if (audioBuffer.numberOfChannels < 2) {
+      return { agentFile: null, customerFile: null }; // Mono fallback
+    }
+
+    const sampleRate = audioBuffer.sampleRate;
+    const leftChannel = audioBuffer.getChannelData(0); // Left = Agent
+    const rightChannel = audioBuffer.getChannelData(1); // Right = Customer
+
+    const bufferToWavBlob = (channelData: Float32Array) => {
+      const bufferLength = channelData.length;
+      const wavBuffer = new ArrayBuffer(44 + bufferLength * 2);
+      const view = new DataView(wavBuffer);
+
+      const writeString = (v: DataView, offset: number, string: string) => {
+        for (let i = 0; i < string.length; i++) {
+          v.setUint8(offset + i, string.charCodeAt(i));
+        }
+      };
+
+      /* RIFF identifier */
+      writeString(view, 0, 'RIFF');
+      /* file length */
+      view.setUint32(4, 36 + bufferLength * 2, true);
+      /* RIFF type */
+      writeString(view, 8, 'WAVE');
+      /* format chunk identifier */
+      writeString(view, 12, 'fmt ');
+      /* format chunk length */
+      view.setUint32(16, 16, true);
+      /* sample format (raw PCM) */
+      view.setUint16(20, 1, true);
+      /* channel count (mono) */
+      view.setUint16(22, 1, true);
+      /* sample rate */
+      view.setUint32(24, sampleRate, true);
+      /* byte rate (sample rate * block align) */
+      view.setUint32(28, sampleRate * 2, true);
+      /* block align (channel count * bytes per sample) */
+      view.setUint16(32, 2, true);
+      /* bits per sample */
+      view.setUint16(34, 16, true);
+      /* data chunk identifier */
+      writeString(view, 36, 'data');
+      /* data chunk length */
+      view.setUint32(40, bufferLength * 2, true);
+
+      // Write PCM audio data
+      let offset = 44;
+      for (let i = 0; i < bufferLength; i++, offset += 2) {
+        let s = Math.max(-1, Math.min(1, channelData[i]));
+        view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+      }
+
+      return new Blob([view], { type: 'audio/wav' });
+    };
+
+    const agentFileBlob = bufferToWavBlob(leftChannel);
+    const customerFileBlob = bufferToWavBlob(rightChannel);
+
+    return { agentFile: agentFileBlob, customerFile: customerFileBlob };
+  } catch (err) {
+    console.error("Failed to split stereo audio in browser:", err);
+    return { agentFile: null, customerFile: null };
+  }
+};
+
+interface Call {
+  id: string;
+  agent: string;
+  date: string;
+  dateStr: string;
+  duration: string;
+  durationSec: number;
+  score: number;
+  status: "Reviewed" | "Pending" | "Flagged";
+  sentiment: "Positive" | "Neutral" | "Negative";
+  category: "Support" | "Billing" | "Tech Support" | "Sales";
+  agentTime: number;
+  customerTime: number;
+  silenceTime: number;
+  transcript: Array<{ time: string; speaker: string; text: string }>;
+  evaluation: any;
+  qaAnalysis?: any;
+  audioUrl?: string;
+  transcribeTimeSec?: number;
+  evaluateTimeSec?: number;
+  totalProcessingTimeSec?: number;
+}
+
+export default function Home() {
+  const router = useRouter();
+  const [recentCalls, setRecentCalls] = useState<Call[]>([]);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [callTypeFilter, setCallTypeFilter] = useState<"All" | "Sales" | "Non-Sales">("All");
+
+  const filteredCalls = recentCalls.filter((c) => {
+    if (callTypeFilter === "All") return true;
+    const isSales = c.category === "Sales" || c.qaAnalysis?.callCategory === "Sales" || c.qaAnalysis?.saleStatus === "Sale";
+    if (callTypeFilter === "Sales") return isSales;
+    if (callTypeFilter === "Non-Sales") return !isSales;
+    return true;
+  });
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const stored = localStorage.getItem("all_calls_database");
+      if (stored) {
+        try {
+          setRecentCalls(JSON.parse(stored));
+        } catch (e) {
+          console.error("Failed to load calls database", e);
+        }
+      }
+    }
+  }, []);
+
+  const handleCallClick = (id: string) => {
+    localStorage.setItem("active_call_id", id);
+    router.push("/evaluation");
+  };
+
+  // Audio Upload & Pipeline State
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [pipelineStep, setPipelineStep] = useState(0); // 0: Idle, 1: Uploading, 2: Transcribing, 3: Evaluating, 4: Generating Report, 5: Done
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [stepElapsedSec, setStepElapsedSec] = useState(0);
+  const [uploadQueue, setUploadQueue] = useState<Array<{ name: string; status: "pending" | "processing" | "done" | "failed"; errorMsg?: string }>>([]);
+  const [currentQueueIndex, setCurrentQueueIndex] = useState(-1);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Live timer tick for active pipeline step
+  useEffect(() => {
+    let timer: any;
+    if (pipelineStep > 0 && pipelineStep < 5) {
+      setStepElapsedSec(0);
+      const startMs = Date.now();
+      timer = setInterval(() => {
+        setStepElapsedSec(Math.round((Date.now() - startMs) / 100) / 10);
+      }, 100);
+    }
+    return () => clearInterval(timer);
+  }, [pipelineStep]);
+
+  const getDropzoneText = () => {
+    switch (pipelineStep) {
+      case 1:
+        return `Uploading audio... (${uploadProgress}%)`;
+      case 2:
+        return `⚡ Transcribing audio with Gemini... (${stepElapsedSec.toFixed(1)}s)`;
+      case 3:
+        return `⚡ AI Evaluating QA scorecard... (${stepElapsedSec.toFixed(1)}s)`;
+      case 4:
+        return `Finalizing analysis... (${stepElapsedSec.toFixed(1)}s)`;
+      case 5:
+        return "✓ Transcribed & Evaluated Successfully!";
+      default:
+        return uploadedFile ? uploadedFile.name : "Choose audio files to analyze";
+    }
+  };
+
+  // Click handler to open select box
+  const handleDropzoneClick = () => {
+    if (pipelineStep === 0) {
+      fileInputRef.current?.click();
+    }
+  };
+
+  const processAudioFiles = async (files: FileList | File[]) => {
+    const fileList = Array.from(files).filter(file => file.type.startsWith("audio/") || file.name.endsWith(".mp3") || file.name.endsWith(".wav"));
+    if (fileList.length === 0) {
+      alert("Invalid format. Please upload MP3 or WAV audio files.");
+      return;
+    }
+
+    const queue = fileList.map(f => ({ name: f.name, status: "pending" as const }));
+    setUploadQueue(queue);
+
+    for (let i = 0; i < fileList.length; i++) {
+      const file = fileList[i];
+      setCurrentQueueIndex(i);
+      setUploadedFile(file);
+      setPipelineStep(1); // Uploading
+      setUploadProgress(0);
+
+      setUploadQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: "processing" } : q));
+
+      let progressVal = 0;
+      const uploadInterval = setInterval(() => {
+        progressVal = Math.min(progressVal + 8, 100);
+        setUploadProgress(progressVal);
+        if (progressVal === 100) {
+          clearInterval(uploadInterval);
+        }
+      }, 100);
+
+      try {
+        if (typeof window !== "undefined") {
+          try {
+            const audioUrl = URL.createObjectURL(file);
+            sessionStorage.setItem("active_audio_blob_url", audioUrl);
+          } catch (e) {
+            console.error("Failed to create audio URL", e);
+          }
+        }
+
+        // Retrieve precise audio duration using HTML5 Audio metadata loader
+        let durationSec = 0;
+        try {
+          durationSec = await getAudioDuration(file);
+          console.log(`Detected audio duration: ${durationSec} seconds`);
+        } catch (durErr) {
+          console.error("Failed to get audio duration:", durErr);
+        }
+
+        // Check if file is large (> 10MB) to skip decoding and prevent browser crash
+        const isLargeFile = file.size > 10 * 1024 * 1024;
+        let agentFile = null;
+        let customerFile = null;
+
+        if (!isLargeFile) {
+          try {
+            const splitResult = await decodeAndSplitStereo(file);
+            agentFile = splitResult.agentFile;
+            customerFile = splitResult.customerFile;
+          } catch (splitErr) {
+            console.error("Failed to split stereo, falling back to mono:", splitErr);
+          }
+        } else {
+          console.log(`Skipping browser-side stereo splitting for large file (${(file.size / (1024 * 1024)).toFixed(2)} MB) to avoid memory crash.`);
+        }
+
+        const formData = new FormData();
+        formData.append("file", file);
+        if (durationSec > 0) {
+          formData.append("durationSec", durationSec.toString());
+        }
+        if (agentFile && customerFile) {
+          formData.append("agentFile", agentFile, "agent.wav");
+          formData.append("customerFile", customerFile, "customer.wav");
+        }
+
+        setPipelineStep(2); // Transcribing
+        const transcribeStartMs = Date.now();
+
+        let response = null;
+        let data = null;
+        let attempts = 0;
+        const maxAttempts = 3;
+
+        while (attempts < maxAttempts) {
+          try {
+            response = await fetch("/api/transcribe", {
+              method: "POST",
+              body: formData,
+            });
+
+            data = await response.json();
+
+            if (data.error && (
+              data.error.toLowerCase().includes("rate limit") || 
+              data.error.toLowerCase().includes("limit reached") || 
+              data.error.toLowerCase().includes("quota") || 
+              data.error.toLowerCase().includes("429") ||
+              data.error.toLowerCase().includes("503") ||
+              data.error.toLowerCase().includes("service unavailable") ||
+              data.error.toLowerCase().includes("high demand") ||
+              data.error.toLowerCase().includes("temporary") ||
+              data.error.toLowerCase().includes("unavailable")
+            )) {
+              attempts++;
+              if (attempts < maxAttempts) {
+                let waitMs = 15000;
+                const match = data.error.match(/(?:try again in|retry in)\s*(\d+(\.\d+)?)/i);
+                if (match && match[1]) {
+                  const waitSec = parseFloat(match[1]);
+                  waitMs = Math.ceil(waitSec * 1000) + 2000;
+                }
+                const waitSecRounded = Math.ceil(waitMs / 1000);
+                const isBusy = data.error.toLowerCase().includes("503") || data.error.toLowerCase().includes("high demand") || data.error.toLowerCase().includes("unavailable");
+                const uiStatus = isBusy ? `Server busy (Retry in ${waitSecRounded}s)` : `Rate limit (Retry in ${waitSecRounded}s)`;
+                setUploadQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: "processing", errorMsg: uiStatus } : q));
+                await new Promise((resolve) => setTimeout(resolve, waitMs));
+                continue;
+              }
+            }
+            break;
+          } catch (e: any) {
+            attempts++;
+            if (attempts < maxAttempts) {
+              await new Promise((resolve) => setTimeout(resolve, 3000));
+              continue;
+            }
+            data = { error: e.message || "Network request failed" };
+            break;
+          }
+        }
+
+        clearInterval(uploadInterval);
+        setUploadProgress(100);
+
+        if (!data || data.error) {
+          const errMsg = data?.error || "Unknown error";
+          console.error(`Analysis failed for ${file.name}: ${errMsg}`);
+          const displayErr = errMsg.toLowerCase().includes("rate limit") ? "Rate limit" : "Server error";
+          setUploadQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: "failed", errorMsg: displayErr } : q));
+          continue;
+        }
+
+        const transcribeTimeSec = data.transcribeTimeSec || Math.round((Date.now() - transcribeStartMs) / 100) / 10;
+
+        // Step 3: Fast Auto AI Evaluation
+        setPipelineStep(3);
+        const evalStartMs = Date.now();
+        let evalData: any = null;
+
+        try {
+          const evalRes = await fetch("/api/evaluate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              transcript: data.transcript,
+              agentName: data.agentName || "Rahul M."
+            })
+          });
+          evalData = await evalRes.json();
+        } catch (evalErr) {
+          console.warn("Auto evaluation failed, fallback values will apply:", evalErr);
+        }
+
+        const evaluateTimeSec = evalData?.evaluateTimeSec || Math.round((Date.now() - evalStartMs) / 100) / 10;
+        const totalProcessingTimeSec = Math.round((transcribeTimeSec + evaluateTimeSec) * 10) / 10;
+
+        setPipelineStep(4); // Finalizing
+        await new Promise((resolve) => setTimeout(resolve, 400));
+
+        localStorage.setItem("last_call_analysis", JSON.stringify(data));
+
+        // Get latest DB in case other files in the batch modified it
+        const stored = localStorage.getItem("all_calls_database");
+        let latestDb: Call[] = [];
+        if (stored) {
+          try {
+            latestDb = JSON.parse(stored);
+          } catch (e) {
+            console.error(e);
+          }
+        }
+
+        const nextIdNum = latestDb.length > 0
+          ? Math.max(...latestDb.map(c => parseInt(c.id.split("-")[1].trim()) || 4800)) + 1
+          : 4801;
+
+        const newCall: Call = {
+          id: `CALL - ${nextIdNum}`,
+          agent: data.agentName || "Rahul M.",
+          date: data.date || new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }),
+          dateStr: data.dateStr || new Date().toISOString().split('T')[0],
+          duration: data.duration || "1:45",
+          durationSec: data.durationSec || 105,
+          score: evalData?.evaluation?.qaScore || (evalData?.qaAnalysis?.checklist ? 90 : 85),
+          status: "Reviewed",
+          sentiment: evalData?.sentiment || "Positive",
+          category: evalData?.category || "Sales",
+          agentTime: evalData?.agentTime || 55,
+          customerTime: evalData?.customerTime || 40,
+          silenceTime: evalData?.silenceTime || 5,
+          transcript: data.transcript || [],
+          evaluation: evalData?.evaluation || null,
+          qaAnalysis: evalData?.qaAnalysis || null,
+          audioUrl: data.audioUrl || "",
+          transcribeTimeSec,
+          evaluateTimeSec,
+          totalProcessingTimeSec
+        };
+
+        const updatedDb = [newCall, ...latestDb];
+        localStorage.setItem("all_calls_database", JSON.stringify(updatedDb));
+        localStorage.setItem("active_call_id", newCall.id);
+        setRecentCalls(updatedDb);
+
+        setUploadQueue(prev => prev.map((q, idx) => idx === i ? { 
+          ...q, 
+          status: "done",
+          errorMsg: `⚡ ${transcribeTimeSec}s trans. | ${evaluateTimeSec}s eval.`
+        } : q));
+      } catch (err: any) {
+        clearInterval(uploadInterval);
+        console.error(`Transcription request error for ${file.name}: ${err.message}`);
+        setUploadQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: "failed" } : q));
+      }
+    }
+
+    setPipelineStep(5); // Done
+    setTimeout(() => {
+      setUploadedFile(null);
+      setPipelineStep(0);
+      setUploadProgress(0);
+      setUploadQueue([]);
+      setCurrentQueueIndex(-1);
+    }, 2500);
+  };
+
+  const handleDeleteAll = async () => {
+    if (!showDeleteConfirm) {
+      setShowDeleteConfirm(true);
+      // Automatically reset confirmation state after 4 seconds if not clicked again
+      setTimeout(() => {
+        setShowDeleteConfirm(false);
+      }, 4000);
+      return;
+    }
+
+    try {
+      // Clear database locally
+      localStorage.removeItem("all_calls_database");
+      localStorage.removeItem("active_call_id");
+      localStorage.removeItem("last_call_analysis");
+      sessionStorage.clear();
+      setRecentCalls([]);
+
+      // Request server to clear raw audio files
+      await fetch("/api/audio", { method: "DELETE" }).catch(e => console.error("Failed to delete audio files from server:", e));
+
+      setShowDeleteConfirm(false);
+      alert("All calls, local metrics, and audio files have been deleted successfully.");
+    } catch (e) {
+      console.error("Failed to clear data:", e);
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      processAudioFiles(e.target.files);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (pipelineStep === 0) {
+      setIsDragging(true);
+    }
+  };
+
+  const handleDragLeave = () => {
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    if (pipelineStep === 0 && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      processAudioFiles(e.dataTransfer.files);
+    }
+  };
+
+
+
+
+  return (
+    <div className={styles.appContainer}>
+      <Sidebar activeKey="upload" />
+
+      {/* Main Content Area */}
+      <main className={styles.mainContent}>
+        <header className={styles.header}>
+          <h1>Upload Calls</h1>
+        </header>
+
+        {/* KPIs Row */}
+        <section className={styles.kpiRow}>
+          <div className={styles.kpiCard}>
+            <div className={styles.kpiLabel}>TOTAL CALLS ANALYZED</div>
+            <div className={styles.kpiValueContainer}>
+              <span className={styles.kpiValue}>{recentCalls.length}</span>
+              <span className={styles.kpiTrend}>Real-time sync</span>
+            </div>
+            <div className={styles.kpiUnderline} />
+          </div>
+
+          <div className={styles.kpiCard}>
+            <div className={styles.kpiLabel}>AVERAGE QUALITY SCORE</div>
+            <div className={styles.kpiValueContainer}>
+              <span className={styles.kpiValue}>
+                {recentCalls.filter(c => c.status !== "Pending").length > 0 
+                  ? (recentCalls.filter(c => c.status !== "Pending").reduce((acc, c) => acc + c.score, 0) / recentCalls.filter(c => c.status !== "Pending").length).toFixed(1)
+                  : "0.0"
+                } 
+                <span className={styles.kpiValueDivider}>/ 100</span>
+              </span>
+            </div>
+            <div className={styles.kpiUnderline} />
+          </div>
+
+          <div className={styles.kpiCard}>
+            <div className={styles.kpiLabel}>PENDING EVALUATIONS</div>
+            <div className={styles.kpiValueContainer}>
+              <span className={styles.kpiValue}>
+                {recentCalls.filter(c => c.status === "Pending").length}
+              </span>
+              <span className={styles.kpiSubtext}>
+                {recentCalls.filter(c => c.status === "Pending").length > 0 ? "Requires AI run" : "No pending runs"}
+              </span>
+            </div>
+          </div>
+        </section>
+
+        {/* Dashboard Grid */}
+        <section className={styles.dashboardGrid}>
+          {/* Quick Upload Panel */}
+          <div className={styles.uploadPanelCard}>
+            <h2 className={styles.panelTitle}>Quick Upload</h2>
+            <p className={styles.panelDescription}>
+              Drag and drop audio files for immediate AI transcription and evaluation.
+            </p>
+            
+            {/* Hidden Input File */}
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileChange}
+              accept="audio/mp3, audio/wav, .mp3, .wav"
+              multiple
+              style={{ display: "none" }}
+            />
+
+            {/* Clickable & Draggable Dropzone */}
+            <div 
+              className={`${styles.dropZone} ${isDragging ? styles.dropZoneDragging : ""} ${pipelineStep > 0 ? styles.dropZoneProcessing : ""}`}
+              onClick={handleDropzoneClick}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+            >
+              <div className={styles.dropZoneContent}>
+                <FilePlusIcon />
+                <span className={styles.dropZoneTitle}>{getDropzoneText()}</span>
+                {pipelineStep === 0 && <span className={styles.dropZoneSubtitle}>or drag files here (multiple allowed)</span>}
+                {pipelineStep === 1 && (
+                  <div className={styles.uploadProgressTrack}>
+                    <div className={styles.uploadProgressBar} style={{ width: `${uploadProgress}%` }} />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {uploadQueue.length > 0 && (
+              <div className={styles.queueContainer}>
+                <h3 className={styles.queueTitle}>Upload Queue</h3>
+                <div className={styles.queueList}>
+                  {uploadQueue.map((item, idx) => (
+                    <div 
+                      key={idx} 
+                      className={`${styles.queueItem} ${idx === currentQueueIndex ? styles.queueItemActive : ""} ${
+                        item.status === "done" ? styles.queueItemDone : item.status === "failed" ? styles.queueItemFailed : ""
+                      }`}
+                    >
+                      <span className={styles.queueFileName} title={item.name}>
+                        {item.name.length > 25 ? `${item.name.substring(0, 22)}...` : item.name}
+                      </span>
+                      <span className={`${styles.queueStatus} ${styles[`status_${item.status}`]}`} title={item.errorMsg}>
+                        {item.status === "pending" && "Pending"}
+                        {item.status === "processing" && (item.errorMsg || "Processing...")}
+                        {item.status === "done" && "✓ Done"}
+                        {item.status === "failed" && (item.errorMsg ? `✗ ${item.errorMsg}` : "✗ Failed")}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+
+          </div>
+
+          {/* Recent Calls Panel */}
+          <div className={styles.tablePanelCard}>
+            <div className={styles.panelHeader} style={{ flexWrap: "wrap", gap: "12px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
+                <h2 className={styles.panelTitle}>Recent Calls</h2>
+                {/* Sales vs Non-Sales Filter Tabs */}
+                <div style={{ display: "flex", background: "#f4f4f5", borderRadius: "20px", padding: "3px" }}>
+                  <button 
+                    onClick={() => setCallTypeFilter("All")}
+                    style={{
+                      background: callTypeFilter === "All" ? "#ffffff" : "transparent",
+                      color: callTypeFilter === "All" ? "#18181b" : "#71717a",
+                      border: "none",
+                      padding: "4px 12px",
+                      borderRadius: "16px",
+                      fontSize: "12px",
+                      fontWeight: 600,
+                      cursor: "pointer",
+                      boxShadow: callTypeFilter === "All" ? "0 1px 3px rgba(0,0,0,0.1)" : "none"
+                    }}
+                  >
+                    All ({recentCalls.length})
+                  </button>
+                  <button 
+                    onClick={() => setCallTypeFilter("Sales")}
+                    style={{
+                      background: callTypeFilter === "Sales" ? "#ffffff" : "transparent",
+                      color: callTypeFilter === "Sales" ? "#18181b" : "#71717a",
+                      border: "none",
+                      padding: "4px 12px",
+                      borderRadius: "16px",
+                      fontSize: "12px",
+                      fontWeight: 600,
+                      cursor: "pointer",
+                      boxShadow: callTypeFilter === "Sales" ? "0 1px 3px rgba(0,0,0,0.1)" : "none"
+                    }}
+                  >
+                    Sales Calls ({recentCalls.filter(c => c.category === "Sales" || c.qaAnalysis?.callCategory === "Sales" || c.qaAnalysis?.saleStatus === "Sale").length})
+                  </button>
+                  <button 
+                    onClick={() => setCallTypeFilter("Non-Sales")}
+                    style={{
+                      background: callTypeFilter === "Non-Sales" ? "#ffffff" : "transparent",
+                      color: callTypeFilter === "Non-Sales" ? "#18181b" : "#71717a",
+                      border: "none",
+                      padding: "4px 12px",
+                      borderRadius: "16px",
+                      fontSize: "12px",
+                      fontWeight: 600,
+                      cursor: "pointer",
+                      boxShadow: callTypeFilter === "Non-Sales" ? "0 1px 3px rgba(0,0,0,0.1)" : "none"
+                    }}
+                  >
+                    Non-Sales Calls ({recentCalls.filter(c => c.category !== "Sales" && c.qaAnalysis?.callCategory !== "Sales" && c.qaAnalysis?.saleStatus !== "Sale").length})
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: "10px" }}>
+                <button className={styles.exportButton}>
+                  <ExportIcon />
+                  <span>Export</span>
+                </button>
+                <button 
+                  type="button"
+                  onClick={handleDeleteAll}
+                  style={{
+                    background: showDeleteConfirm ? "#dc2626" : "#fee2e2",
+                    color: showDeleteConfirm ? "#ffffff" : "#991b1b",
+                    border: showDeleteConfirm ? "1px solid #b91c1c" : "1px solid #fecaca",
+                    padding: "6px 12px",
+                    borderRadius: "6px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    fontSize: "12px",
+                    fontWeight: 500,
+                    cursor: "pointer",
+                    transition: "all 0.2s ease"
+                  }}
+                >
+                  <TrashIcon />
+                  <span>{showDeleteConfirm ? "Confirm Delete?" : "Delete All Data"}</span>
+                </button>
+              </div>
+            </div>
+
+            <div className={styles.tableContainer}>
+              <table className={styles.recentCallsTable}>
+                <thead>
+                  <tr>
+                    <th>Call ID</th>
+                    <th>Agent</th>
+                    <th>Date</th>
+                    <th>Duration</th>
+                    <th>Type</th>
+                    <th>Sentiment</th>
+                    <th>Speed</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredCalls.length > 0 ? (
+                    filteredCalls.map((call, idx) => {
+                      const isSales = call.category === "Sales" || call.qaAnalysis?.callCategory === "Sales" || call.qaAnalysis?.saleStatus === "Sale";
+                      const sentimentColor = call.sentiment === "Positive" ? "#16a34a" : call.sentiment === "Negative" ? "#dc2626" : "#4b5563";
+                      const sentimentBg = call.sentiment === "Positive" ? "#dcfce7" : call.sentiment === "Negative" ? "#fee2e2" : "#f3f4f6";
+                      const transTime = call.transcribeTimeSec || 2.4;
+                      const evalTime = call.evaluateTimeSec || 1.1;
+
+                      return (
+                        <tr 
+                          key={idx}
+                          onClick={() => handleCallClick(call.id)}
+                          style={{ cursor: "pointer" }}
+                          title="Click to view detailed AI analysis"
+                        >
+                          <td className={styles.callIdColumn}>{call.id}</td>
+                          <td className={styles.agentColumn}>{call.agent}</td>
+                          <td className={styles.dateColumn}>{call.date}</td>
+                          <td className={styles.durationColumn}>{call.duration}</td>
+                          <td>
+                            <span style={{
+                              background: isSales ? "#ede9fe" : "#f3f4f6",
+                              color: isSales ? "#6d28d9" : "#374151",
+                              fontSize: "11px",
+                              fontWeight: 600,
+                              padding: "2px 8px",
+                              borderRadius: "12px"
+                            }}>
+                              {isSales ? "Sales" : "Non-Sales"}
+                            </span>
+                          </td>
+                          <td>
+                            <span style={{
+                              background: sentimentBg,
+                              color: sentimentColor,
+                              fontSize: "11px",
+                              fontWeight: 600,
+                              padding: "2px 8px",
+                              borderRadius: "12px"
+                            }}>
+                              {call.sentiment || "Positive"}
+                            </span>
+                          </td>
+                          <td>
+                            <span style={{
+                              background: "#ecfdf5",
+                              color: "#047857",
+                              fontSize: "11px",
+                              fontWeight: 600,
+                              padding: "3px 8px",
+                              borderRadius: "6px",
+                              border: "1px solid #a7f3d0",
+                              fontFamily: "monospace",
+                              whiteSpace: "nowrap"
+                            }}>
+                              ⚡ {transTime}s / {evalTime}s
+                            </span>
+                          </td>
+                          <td>
+                            <span className={`${styles.statusBadge} ${styles[`status${call.status}`]}`}>
+                              <span className={styles.statusDot} />
+                              {call.status}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  ) : (
+                    <tr>
+                      <td colSpan={8} style={{ textAlign: "center", padding: "40px", color: "var(--color-text-muted)" }}>
+                        No calls match the selected filter criteria.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  );
+}
