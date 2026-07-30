@@ -453,8 +453,54 @@ export default function Home() {
         }
 
         const transcribeTimeSec = data.transcribeTimeSec || Math.round((Date.now() - transcribeStartMs) / 100) / 10;
+        const transcribeTokens = data.transcribeTokens || data.tokensUsed || Math.round((data.durationSec || 105) * 12 + 450);
 
-        // Step 3: Fast Auto AI Evaluation
+        // Immediate Fail-Safe Saving: Save call transcript to database right after transcription finishes
+        const stored = localStorage.getItem("all_calls_database");
+        let latestDb: Call[] = [];
+        if (stored) {
+          try {
+            latestDb = JSON.parse(stored);
+          } catch (e) {
+            console.error(e);
+          }
+        }
+
+        const nextIdNum = String(latestDb.length + 1).padStart(3, "0");
+        let newCall: Call = {
+          id: `CALL - ${nextIdNum}`,
+          agent: data.agentName || "Rahul M.",
+          date: data.date || new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }),
+          dateStr: data.dateStr || new Date().toISOString().split('T')[0],
+          duration: data.duration || "1:45",
+          durationSec: data.durationSec || 105,
+          score: 85,
+          status: "Pending",
+          sentiment: "Positive",
+          category: "Sales",
+          agentTime: 55,
+          customerTime: 40,
+          silenceTime: 5,
+          transcript: data.transcript || [],
+          evaluation: null,
+          qaAnalysis: null,
+          audioUrl: data.audioUrl || "",
+          transcribeTimeSec,
+          evaluateTimeSec: 0,
+          totalProcessingTimeSec: transcribeTimeSec,
+          transcribeTokens,
+          evaluateTokens: 0,
+          tokensUsed: transcribeTokens
+        };
+
+        // Guarantee transcript is saved in localStorage immediately!
+        let updatedDb = [newCall, ...latestDb];
+        localStorage.setItem("all_calls_database", JSON.stringify(updatedDb));
+        localStorage.setItem("active_call_id", newCall.id);
+        localStorage.setItem("last_call_analysis", JSON.stringify(data));
+        setRecentCalls(updatedDb);
+
+        // Step 3: Auto AI Evaluation (Optional enhancement)
         setPipelineStep(3);
         const evalStartMs = Date.now();
         let evalData: any = null;
@@ -468,73 +514,51 @@ export default function Home() {
               agentName: data.agentName || "Rahul M."
             })
           });
-          evalData = await evalRes.json();
-        } catch (evalErr) {
-          console.warn("Auto evaluation failed, fallback values will apply:", evalErr);
-        }
 
-        const evaluateTimeSec = evalData?.evaluateTimeSec || Math.round((Date.now() - evalStartMs) / 100) / 10;
-        const totalProcessingTimeSec = Math.round((transcribeTimeSec + evaluateTimeSec) * 10) / 10;
+          if (evalRes.ok) {
+            evalData = await evalRes.json();
+            if (evalData && (evalData.evaluation || evalData.qaAnalysis)) {
+              const evaluateTimeSec = evalData.evaluateTimeSec || Math.round((Date.now() - evalStartMs) / 100) / 10;
+              const evaluateTokens = evalData.evaluateTokens || Math.round((data.durationSec || 105) * 8 + 650);
+
+              newCall = {
+                ...newCall,
+                score: evalData.evaluation?.qaScore || (evalData.qaAnalysis?.checklist ? 90 : 85),
+                status: "Reviewed",
+                sentiment: evalData.sentiment || "Positive",
+                category: evalData.category || "Sales",
+                agentTime: evalData.agentTime || 55,
+                customerTime: evalData.customerTime || 40,
+                silenceTime: evalData.silenceTime || 5,
+                evaluation: evalData.evaluation || null,
+                qaAnalysis: evalData.qaAnalysis || null,
+                evaluateTimeSec,
+                totalProcessingTimeSec: Math.round((transcribeTimeSec + evaluateTimeSec) * 10) / 10,
+                evaluateTokens,
+                tokensUsed: transcribeTokens + evaluateTokens
+              };
+
+              // Update database with completed AI evaluation
+              updatedDb = updatedDb.map(c => c.id === newCall.id ? newCall : c);
+              localStorage.setItem("all_calls_database", JSON.stringify(updatedDb));
+              setRecentCalls(updatedDb);
+            }
+          }
+        } catch (evalErr) {
+          console.warn("Auto evaluation encountered network issue, transcript remains saved!", evalErr);
+        }
 
         setPipelineStep(4); // Finalizing
         await new Promise((resolve) => setTimeout(resolve, 400));
 
-        localStorage.setItem("last_call_analysis", JSON.stringify(data));
-
-        const stored = localStorage.getItem("all_calls_database");
-        let latestDb: Call[] = [];
-        if (stored) {
-          try {
-            latestDb = JSON.parse(stored);
-          } catch (e) {
-            console.error(e);
-          }
-        }
-
-        const transcribeTokens = data.transcribeTokens || data.tokensUsed || Math.round((data.durationSec || 105) * 12 + 450);
-        const evaluateTokens = evalData?.evaluateTokens || Math.round((data.durationSec || 105) * 8 + 650);
-        const totalTokens = transcribeTokens + evaluateTokens;
-
-        const nextIdNum = String(latestDb.length + 1).padStart(3, "0");
-        const newCall: Call = {
-          id: `CALL - ${nextIdNum}`,
-          agent: data.agentName || "Rahul M.",
-          date: data.date || new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }),
-          dateStr: data.dateStr || new Date().toISOString().split('T')[0],
-          duration: data.duration || "1:45",
-          durationSec: data.durationSec || 105,
-          score: evalData?.evaluation?.qaScore || (evalData?.qaAnalysis?.checklist ? 90 : 85),
-          status: "Reviewed",
-          sentiment: evalData?.sentiment || "Positive",
-          category: evalData?.category || "Sales",
-          agentTime: evalData?.agentTime || 55,
-          customerTime: evalData?.customerTime || 40,
-          silenceTime: evalData?.silenceTime || 5,
-          transcript: data.transcript || [],
-          evaluation: evalData?.evaluation || null,
-          qaAnalysis: evalData?.qaAnalysis || null,
-          audioUrl: data.audioUrl || "",
-          transcribeTimeSec,
-          evaluateTimeSec,
-          totalProcessingTimeSec,
-          transcribeTokens,
-          evaluateTokens,
-          tokensUsed: totalTokens
-        };
-
-        const updatedDb = [newCall, ...latestDb];
-        localStorage.setItem("all_calls_database", JSON.stringify(updatedDb));
-        localStorage.setItem("active_call_id", newCall.id);
-        setRecentCalls(updatedDb);
-
         setUploadQueue(prev => prev.map((q, idx) => idx === i ? {
           ...q,
           status: "done",
-          errorMsg: `⚡ ${transcribeTimeSec}s trans. | ${evaluateTimeSec}s eval.`
+          errorMsg: `⚡ ${transcribeTimeSec}s trans. | ${newCall.evaluateTimeSec || 0}s eval.`
         } : q));
       } catch (err: any) {
         clearInterval(uploadInterval);
-        console.error(`Transcription request error for ${file.name}: ${err.message}`);
+        console.error(`Transcription processing notice for ${file.name}: ${err.message}`);
         setUploadQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: "failed" } : q));
       }
     }
