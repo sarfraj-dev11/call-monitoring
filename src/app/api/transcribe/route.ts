@@ -306,6 +306,7 @@ export async function POST(request: Request) {
     if (contentType.includes("application/json")) {
       const body = await request.json();
       const { fileUri, audioUrl, fileMimeType, fileName, durationSec, fileApiName } = body;
+      let base64AudioData = "";
 
       // Handle Firebase Storage Audio URL
       if (audioUrl) {
@@ -315,6 +316,7 @@ export async function POST(request: Request) {
           if (!audioRes.ok) throw new Error(`Failed to fetch audio from Firebase Storage: ${audioRes.status}`);
           const arrayBuffer = await audioRes.arrayBuffer();
           const buffer = Buffer.from(arrayBuffer);
+          base64AudioData = buffer.toString("base64");
           const fileBlob = new Blob([buffer], { type: fileMimeType || "audio/mp3" });
           const reqFileName = fileName || "audio.mp3";
           const reqDurationSec = Number(durationSec) || 0;
@@ -412,7 +414,7 @@ export async function POST(request: Request) {
         }
       }
 
-      if (!fileUri && !audioUrl) {
+      if (!fileUri && !audioUrl && !base64AudioData) {
         return NextResponse.json({ error: "fileUri or audioUrl missing in payload" }, { status: 400 });
       }
 
@@ -470,6 +472,10 @@ Return ONLY a single valid JSON object with this EXACT structure:
       let genAttempts = 0;
       const maxGenAttempts = modelEndpoints.length * 2;
 
+      const mediaPart = base64AudioData
+        ? { inlineData: { mimeType: fileMimeType || "audio/mp3", data: base64AudioData } }
+        : { fileData: { fileUri, mimeType: fileMimeType || "audio/mp3" } };
+
       while (genAttempts < maxGenAttempts) {
         const currentEndpoint = modelEndpoints[genAttempts % modelEndpoints.length];
         try {
@@ -479,7 +485,7 @@ Return ONLY a single valid JSON object with this EXACT structure:
             body: JSON.stringify({
               contents: [{
                 parts: [
-                  { fileData: { fileUri, mimeType: fileMimeType || "audio/mp3" } },
+                  mediaPart,
                   { text: `Transcribe this audio file completely.\n${durationContext}\nProvide a word-for-word, verbatim transcript of the entire audio.\nCapture every single turn between the Agent and the Customer exactly as spoken, with accurate timestamps in hh:mm:ss format.` }
                 ]
               }],
