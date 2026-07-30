@@ -291,7 +291,7 @@ You must return your output ONLY in a valid JSON object matching the following s
     let evaluationResult;
     try {
       // 4. Generate content with retries for transient errors
-      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey}`;
+      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`;
       let evalAttempts = 0;
       const maxEvalAttempts = 4;
       let completionData: any = null;
