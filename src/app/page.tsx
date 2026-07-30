@@ -335,66 +335,18 @@ export default function Home() {
           console.error("Failed to get audio duration:", durErr);
         }
 
-        // Direct Gemini Resumable File Upload (Bypasses Vercel 4.5MB Payload limit completely for 3-hour calls)
+        // Local Whisper AI Upload Mode (Bypasses Google CORS & 100% Free)
         let data = null;
         let response = null;
         const transcribeStartMs = Date.now();
-        try {
-          console.log(`Initiating direct Gemini File upload for ${file.name} (${(file.size / (1024 * 1024)).toFixed(2)} MB)...`);
-          const initRes = await fetch(`/api/transcribe?action=init-upload&fileName=${encodeURIComponent(file.name)}&fileSize=${file.size}&fileMimeType=${encodeURIComponent(file.type || "audio/mp3")}`);
-          const initData = await initRes.json();
 
-          if (initData.uploadUrl) {
-            console.log("Uploading file directly to Gemini File API...");
-            const uploadRes = await fetch(initData.uploadUrl, {
-              method: "PUT",
-              headers: {
-                "X-Goog-Upload-Command": "upload, finalize",
-                "X-Goog-Upload-Offset": "0",
-                "Content-Length": file.size.toString(),
-              },
-              body: file,
-            });
-
-            if (uploadRes.ok) {
-              const uploadData = await uploadRes.json();
-              const fileUri = uploadData.file?.uri;
-              const fileApiName = uploadData.file?.name;
-
-              if (fileUri) {
-                setPipelineStep(2); // Transcribing
-                const transcribeStartMs = Date.now();
-
-                response = await fetch("/api/transcribe", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    fileUri,
-                    fileMimeType: file.type || "audio/mp3",
-                    fileName: file.name,
-                    durationSec,
-                    fileApiName
-                  }),
-                });
-
-                data = await response.json();
-              }
-            }
-          }
-        } catch (directErr) {
-          console.warn("Direct Gemini upload failed, trying standard upload fallback...", directErr);
+        const formData = new FormData();
+        formData.append("file", file);
+        if (durationSec > 0) {
+          formData.append("durationSec", durationSec.toString());
         }
 
-        // Fallback to standard FormData upload if direct upload was skipped or failed
-        if (!data) {
-          const formData = new FormData();
-          formData.append("file", file);
-          if (durationSec > 0) {
-            formData.append("durationSec", durationSec.toString());
-          }
-
-          setPipelineStep(2); // Transcribing
-          const transcribeStartMs = Date.now();
+        setPipelineStep(2); // Transcribing with Local Whisper AI
 
           let attempts = 0;
           const maxAttempts = 5;
@@ -447,7 +399,6 @@ export default function Home() {
               break;
             }
           }
-        }
 
         clearInterval(uploadInterval);
         setUploadProgress(100);
