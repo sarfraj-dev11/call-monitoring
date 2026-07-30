@@ -367,11 +367,27 @@ export default function TranscriptPage() {
     }
     if (tEnd <= tStart) tEnd = tStart + 3;
 
-    // 1. Remove line from transcript
-    const updatedTranscript = transcriptData.filter((_, i) => i !== index);
+    const cutDuration = tEnd - tStart;
+
+    // 1. Shift remaining transcript timestamps backwards by cutDuration
+    const updatedTranscript = transcriptData
+      .filter((_, i) => i !== index)
+      .map((item) => {
+        const sec = timeStringToSeconds(item.time);
+        if (sec > tStart) {
+          const newSec = Math.max(0, sec - cutDuration);
+          const hrs = Math.floor(newSec / 3600);
+          const mins = Math.floor((newSec % 3600) / 60);
+          const secs = Math.floor(newSec % 60);
+          const timeStr = `${hrs.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+          return { ...item, time: timeStr };
+        }
+        return item;
+      });
+
     setTranscriptData(updatedTranscript);
 
-    // 2. Real-Time Web Audio Buffer Trimming
+    // 2. Real-Time Web Audio Buffer Slicing & Encoding
     if (hasRealAudio && audioSrc) {
       try {
         const response = await fetch(audioSrc);
@@ -404,23 +420,52 @@ export default function TranscriptPage() {
           }
 
           const wavBlob = audioBufferToWavBlob(trimmedBuffer);
-          const trimmedUrl = URL.createObjectURL(wavBlob);
+          
+          // Convert Blob to Data URL for permanent database & audio element binding
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const dataUrl = reader.result as string;
+            setAudioSrc(dataUrl);
+            setHasBeenTrimmed(true);
+            setDurationSec(Math.round(trimmedBuffer.duration));
+            sessionStorage.setItem("active_audio_blob_url", dataUrl);
 
-          setAudioSrc(trimmedUrl);
-          setHasBeenTrimmed(true);
-          setDurationSec(Math.round(trimmedBuffer.duration));
-          sessionStorage.setItem("active_audio_blob_url", trimmedUrl);
+            if (audioRef.current) {
+              audioRef.current.src = dataUrl;
+              audioRef.current.load();
+            }
 
-          if (audioRef.current) {
-            audioRef.current.src = trimmedUrl;
-          }
+            // Save trimmed audio into localStorage database
+            const storedDb = localStorage.getItem("all_calls_database");
+            if (storedDb && activeCallId) {
+              try {
+                const db = JSON.parse(storedDb);
+                const updatedDb = db.map((c: any) => {
+                  if (c.id === activeCallId) {
+                    return {
+                      ...c,
+                      transcript: updatedTranscript,
+                      audioUrl: dataUrl,
+                      durationSec: Math.round(trimmedBuffer.duration)
+                    };
+                  }
+                  return c;
+                });
+                localStorage.setItem("all_calls_database", JSON.stringify(updatedDb));
+              } catch (e) {
+                console.error("Failed to save trimmed audio", e);
+              }
+            }
+          };
+          reader.readAsDataURL(wavBlob);
+          return;
         }
       } catch (audioErr) {
         console.error("Failed to trim audio buffer on line deletion:", audioErr);
       }
     }
 
-    // 3. Save updated transcript to database
+    // Fallback save if audio is not present
     const storedDb = localStorage.getItem("all_calls_database");
     if (storedDb && activeCallId) {
       try {
