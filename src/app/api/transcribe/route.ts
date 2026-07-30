@@ -195,20 +195,254 @@ async function transcribeAndEvaluateWithGemini(
 }
 
 
+// GET handler to initiate resumable upload or check file status (Bypasses Vercel 4.5MB request limit)
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const action = searchParams.get("action");
+  const geminiApiKey = process.env.GEMINI_API_KEY;
+
+  if (!geminiApiKey) {
+    return NextResponse.json({ error: "Gemini API key not set in environment" }, { status: 500 });
+  }
+
+  if (action === "init-upload") {
+    const fileName = searchParams.get("fileName") || "audio.mp3";
+    const fileSize = searchParams.get("fileSize") || "0";
+    const fileMimeType = searchParams.get("fileMimeType") || "audio/mp3";
+
+    try {
+      const initUrl = `https://generativelanguage.googleapis.com/upload/v1beta/files?key=${geminiApiKey}`;
+      const initRes = await fetch(initUrl, {
+        method: "POST",
+        headers: {
+          "X-Goog-Upload-Protocol": "resumable",
+          "X-Goog-Upload-Command": "start",
+          "X-Goog-Upload-Header-Content-Length": fileSize,
+          "X-Goog-Upload-Header-Content-Type": fileMimeType,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ file: { displayName: fileName } }),
+      });
+
+      if (!initRes.ok) {
+        const errText = await initRes.text();
+        throw new Error(`Initiate upload failed (${initRes.status}): ${errText}`);
+      }
+
+      const uploadUrl = initRes.headers.get("x-goog-upload-url");
+      if (!uploadUrl) throw new Error("Missing upload URL from Gemini API");
+
+      return NextResponse.json({ uploadUrl });
+    } catch (err: any) {
+      console.error("Error in init-upload:", err);
+      return NextResponse.json({ error: err.message || "Failed to initialize Gemini upload" }, { status: 500 });
+    }
+  }
+
+  if (action === "check-file") {
+    const fileApiName = searchParams.get("fileApiName");
+    if (!fileApiName) {
+      return NextResponse.json({ error: "fileApiName required" }, { status: 400 });
+    }
+
+    try {
+      const statusUrl = `https://generativelanguage.googleapis.com/v1beta/${fileApiName}?key=${geminiApiKey}`;
+      const statusRes = await fetch(statusUrl);
+      if (statusRes.ok) {
+        const statusData = await statusRes.json();
+        return NextResponse.json({ state: statusData.state || "ACTIVE" });
+      }
+      return NextResponse.json({ state: "ACTIVE" });
+    } catch (err: any) {
+      return NextResponse.json({ state: "ACTIVE" });
+    }
+  }
+
+  return NextResponse.json({ error: "Invalid action" }, { status: 400 });
+}
+
+
 export async function POST(request: Request) {
   const routeStartTime = Date.now();
   try {
+    const geminiApiKey = process.env.GEMINI_API_KEY;
+    if (!geminiApiKey) {
+      return NextResponse.json({ error: "Gemini API key not set in environment" }, { status: 500 });
+    }
+
+    const contentType = request.headers.get("content-type") || "";
+
+    // Direct JSON Payload with Pre-uploaded Gemini File URI (Bypasses Vercel 4.5MB Payload limit for 3-hour calls)
+    if (contentType.includes("application/json")) {
+      const body = await request.json();
+      const { fileUri, fileMimeType, fileName, durationSec, fileApiName } = body;
+
+      if (!fileUri) {
+        return NextResponse.json({ error: "fileUri missing in payload" }, { status: 400 });
+      }
+
+      let durationContext = "";
+      if (durationSec && durationSec > 0) {
+        const minutes = Math.floor(durationSec / 60);
+        const seconds = Math.round(durationSec % 60);
+        durationContext = `The total duration of this audio file is exactly ${minutes} minute(s) and ${seconds} second(s). You must calibrate your output timestamps to fit across this full duration correctly, and ensure the final turns align with the end of the audio file.`;
+      }
+
+      // Check File API Status until ACTIVE
+      if (fileApiName) {
+        let fileState = "PROCESSING";
+        const statusUrl = `https://generativelanguage.googleapis.com/v1beta/${fileApiName}?key=${geminiApiKey}`;
+        let attempts = 0;
+        while (fileState === "PROCESSING" && attempts < 30) {
+          await new Promise((r) => setTimeout(r, 1500));
+          attempts++;
+          try {
+            const statusRes = await fetch(statusUrl);
+            if (statusRes.ok) {
+              const statusData = await statusRes.json();
+              fileState = statusData.state || "ACTIVE";
+            }
+          } catch (e) { }
+        }
+      }
+
+      const systemPromptTranscribe = `You are a high-fidelity verbatim audio transcriber for call center QA evaluations.
+Your task is to transcribe the provided audio file with 100% accuracy.
+Do NOT summarize, truncate, condense, or omit any part of the audio.
+Do NOT skip dialogue turns, filler words, disconnections, or pauses.
+Transcribe every single word spoken between "Agent" and "Customer".
+
+Perform strict speaker diarization:
+Label speaker turns clearly as "Agent" or "Customer".
+Include precise timestamps [hh:mm:ss] for every single speaker change.
+
+Return ONLY a single valid JSON object with this EXACT structure:
+{
+  "agentName": "string",
+  "language": "string",
+  "transcript": [
+    { "time": "00:00:05", "speaker": "Agent", "text": "Hello, thank you for calling support." },
+    { "time": "00:00:10", "speaker": "Customer", "text": "Hi, I need help with my account." }
+  ]
+}`;
+
+      const modelEndpoints = [
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiApiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey}`
+      ];
+
+      let completionData: any = null;
+      let genAttempts = 0;
+      const maxGenAttempts = modelEndpoints.length * 2;
+
+      while (genAttempts < maxGenAttempts) {
+        const currentEndpoint = modelEndpoints[genAttempts % modelEndpoints.length];
+        try {
+          const genResponse = await fetch(currentEndpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{
+                parts: [
+                  { fileData: { fileUri, mimeType: fileMimeType || "audio/mp3" } },
+                  { text: `Transcribe this audio file completely.\n${durationContext}\nProvide a word-for-word, verbatim transcript of the entire audio.\nCapture every single turn between the Agent and the Customer exactly as spoken, with accurate timestamps in hh:mm:ss format.` }
+                ]
+              }],
+              systemInstruction: { parts: [{ text: systemPromptTranscribe }] },
+              generationConfig: { responseMimeType: "application/json", temperature: 0.1, maxOutputTokens: 65536 }
+            }),
+            signal: AbortSignal.timeout(900000)
+          });
+
+          if (!genResponse.ok) {
+            const errText = await genResponse.text();
+            const isTransient = genResponse.status === 429 || genResponse.status === 503 || genResponse.status === 500 || errText.toLowerCase().includes("high demand") || errText.toLowerCase().includes("rate limit");
+            if (isTransient && genAttempts + 1 < maxGenAttempts) {
+              genAttempts++;
+              await new Promise((r) => setTimeout(r, 2000 * genAttempts));
+              continue;
+            }
+            throw new Error(`Gemini generateContent failed: ${genResponse.status} ${genResponse.statusText} - ${errText}`);
+          }
+
+          completionData = await genResponse.json();
+          break;
+        } catch (err: any) {
+          if (genAttempts + 1 < maxGenAttempts) {
+            genAttempts++;
+            await new Promise((r) => setTimeout(r, 2000 * genAttempts));
+            continue;
+          }
+          throw err;
+        }
+      }
+
+      // Cleanup Gemini File API after transcription
+      if (fileApiName) {
+        fetch(`https://generativelanguage.googleapis.com/v1beta/${fileApiName}?key=${geminiApiKey}`, { method: "DELETE" }).catch(() => { });
+      }
+
+      const candidate = completionData.candidates?.[0];
+      let structuredResponseText = candidate?.content?.parts?.[0]?.text;
+      if (!structuredResponseText) {
+        throw new Error("Gemini returned empty response");
+      }
+
+      const parsedResult = safeParseJson(structuredResponseText);
+      const transcribeTokens = completionData?.usageMetadata?.totalTokenCount || Math.round((durationSec || 105) * 12 + 450);
+
+      const processedTranscript = (parsedResult.transcript || []).map((t: any) => ({
+        time: t.time || "00:00:00",
+        speaker: t.speaker || "Agent",
+        text: replacePseudoNamesInText(t.text || "")
+      }));
+
+      const formatDuration = (sec: number) => {
+        if (!sec || isNaN(sec) || sec <= 0) return "1:45";
+        const mins = Math.floor(sec / 60);
+        const secs = Math.round(sec % 60);
+        if (mins > 0) {
+          return secs > 0 ? `${mins} min ${secs} sec` : `${mins} min`;
+        }
+        return `${secs} sec`;
+      };
+
+      const formattedDuration = formatDuration(durationSec);
+      const today = new Date();
+      const formattedToday = today.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+      const formattedIso = today.toISOString().split("T")[0];
+
+      const transcribeTimeMs = Date.now() - routeStartTime;
+      const transcribeTimeSec = Math.round(transcribeTimeMs / 100) / 10;
+      const rawAgentName = parsedResult.agentName || "Adam Miller";
+      const finalAgentName = normalizeAgentName(rawAgentName);
+
+      return NextResponse.json({
+        agentName: finalAgentName,
+        date: formattedToday,
+        dateStr: formattedIso,
+        duration: formattedDuration,
+        durationSec,
+        language: parsedResult.language || "English (India)",
+        transcript: processedTranscript,
+        transcribeTimeMs,
+        transcribeTimeSec,
+        transcribeTokens,
+        tokensUsed: transcribeTokens,
+        evaluation: null,
+        qaAnalysis: null,
+        audioUrl: ""
+      });
+    }
+
+    // Standard FormData Mode (for small files)
     const formData = await request.formData();
     const file = formData.get("file") as File;
     const durationSec = Number(formData.get("durationSec")) || 0;
 
     if (!file) {
       return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
-    }
-
-    const geminiApiKey = process.env.GEMINI_API_KEY;
-    if (!geminiApiKey) {
-      return NextResponse.json({ error: "Gemini API key not set in environment" }, { status: 500 });
     }
 
     // Save audio file to public/uploads directory for static playback
@@ -226,11 +460,8 @@ export async function POST(request: Request) {
         const metadata = await mm.parseBuffer(buffer, file.type || "audio/mp3");
         if (metadata?.format?.duration) {
           serverParsedDurationSec = metadata.format.duration;
-          console.log(`Server-side parsed audio duration: ${serverParsedDurationSec} seconds`);
         }
-      } catch (mmErr) {
-        console.error("music-metadata parsing failed:", mmErr);
-      }
+      } catch (mmErr) { }
 
       const fileExtension = file.name.split(".").pop() || "mp3";
       const fileName = `${Date.now()}.${fileExtension}`;
@@ -238,9 +469,7 @@ export async function POST(request: Request) {
       await fs.writeFile(filePath, buffer);
 
       audioUrl = `/api/audio?file=${fileName}`;
-    } catch (fsErr: any) {
-      console.error("Failed to save audio file to disk:", fsErr);
-    }
+    } catch (fsErr: any) { }
 
     const systemPromptTranscribe = `You are a high-fidelity verbatim audio transcriber for call center QA evaluations.
 Your task is to transcribe the provided audio file with 100% accuracy.

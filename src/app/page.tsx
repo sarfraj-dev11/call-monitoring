@@ -335,66 +335,116 @@ export default function Home() {
           console.error("Failed to get audio duration:", durErr);
         }
 
-        const formData = new FormData();
-        formData.append("file", file);
-        if (durationSec > 0) {
-          formData.append("durationSec", durationSec.toString());
-        }
-
-        setPipelineStep(2); // Transcribing
-        const transcribeStartMs = Date.now();
-
-        let response = null;
+        // Direct Gemini Resumable File Upload (Bypasses Vercel 4.5MB Payload limit completely for 3-hour calls)
         let data = null;
-        let attempts = 0;
-        const maxAttempts = 5;
+        let response = null;
+        try {
+          console.log(`Initiating direct Gemini File upload for ${file.name} (${(file.size / (1024 * 1024)).toFixed(2)} MB)...`);
+          const initRes = await fetch(`/api/transcribe?action=init-upload&fileName=${encodeURIComponent(file.name)}&fileSize=${file.size}&fileMimeType=${encodeURIComponent(file.type || "audio/mp3")}`);
+          const initData = await initRes.json();
 
-        while (attempts < maxAttempts) {
-          try {
-            response = await fetch("/api/transcribe", {
-              method: "POST",
-              body: formData,
+          if (initData.uploadUrl) {
+            console.log("Uploading file directly to Gemini File API...");
+            const uploadRes = await fetch(initData.uploadUrl, {
+              method: "PUT",
+              headers: {
+                "X-Goog-Upload-Command": "upload, finalize",
+                "X-Goog-Upload-Offset": "0",
+                "Content-Length": file.size.toString(),
+              },
+              body: file,
             });
 
-            data = await response.json();
+            if (uploadRes.ok) {
+              const uploadData = await uploadRes.json();
+              const fileUri = uploadData.file?.uri;
+              const fileApiName = uploadData.file?.name;
 
-            if (data.error && (
-              data.error.toLowerCase().includes("rate limit") ||
-              data.error.toLowerCase().includes("limit reached") ||
-              data.error.toLowerCase().includes("quota") ||
-              data.error.toLowerCase().includes("429") ||
-              data.error.toLowerCase().includes("503") ||
-              data.error.toLowerCase().includes("500") ||
-              data.error.toLowerCase().includes("service unavailable") ||
-              data.error.toLowerCase().includes("high demand") ||
-              data.error.toLowerCase().includes("temporary") ||
-              data.error.toLowerCase().includes("unavailable")
-            )) {
-              attempts++;
-              if (attempts < maxAttempts) {
-                let waitMs = 5000 * attempts;
-                const match = data.error.match(/(?:try again in|retry in)\s*(\d+(\.\d+)?)/i);
-                if (match && match[1]) {
-                  const waitSec = parseFloat(match[1]);
-                  waitMs = Math.ceil(waitSec * 1000) + 1000;
-                }
-                const waitSecRounded = Math.ceil(waitMs / 1000);
-                const uiStatus = `Server busy (Retry ${attempts}/${maxAttempts} in ${waitSecRounded}s)`;
-                setUploadQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: "processing", errorMsg: uiStatus } : q));
-                await new Promise((resolve) => setTimeout(resolve, waitMs));
-                continue;
+              if (fileUri) {
+                setPipelineStep(2); // Transcribing
+                const transcribeStartMs = Date.now();
+
+                response = await fetch("/api/transcribe", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    fileUri,
+                    fileMimeType: file.type || "audio/mp3",
+                    fileName: file.name,
+                    durationSec,
+                    fileApiName
+                  }),
+                });
+
+                data = await response.json();
               }
             }
-            break;
-          } catch (e: any) {
-            attempts++;
-            if (attempts < maxAttempts) {
-              setUploadQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: "processing", errorMsg: `Network retry (${attempts}/${maxAttempts})...` } : q));
-              await new Promise((resolve) => setTimeout(resolve, 3000));
-              continue;
+          }
+        } catch (directErr) {
+          console.warn("Direct Gemini upload failed, trying standard upload fallback...", directErr);
+        }
+
+        // Fallback to standard FormData upload if direct upload was skipped or failed
+        if (!data) {
+          const formData = new FormData();
+          formData.append("file", file);
+          if (durationSec > 0) {
+            formData.append("durationSec", durationSec.toString());
+          }
+
+          setPipelineStep(2); // Transcribing
+          const transcribeStartMs = Date.now();
+
+          let attempts = 0;
+          const maxAttempts = 5;
+
+          while (attempts < maxAttempts) {
+            try {
+              response = await fetch("/api/transcribe", {
+                method: "POST",
+                body: formData,
+              });
+
+              data = await response.json();
+
+              if (data.error && (
+                data.error.toLowerCase().includes("rate limit") ||
+                data.error.toLowerCase().includes("limit reached") ||
+                data.error.toLowerCase().includes("quota") ||
+                data.error.toLowerCase().includes("429") ||
+                data.error.toLowerCase().includes("503") ||
+                data.error.toLowerCase().includes("500") ||
+                data.error.toLowerCase().includes("service unavailable") ||
+                data.error.toLowerCase().includes("high demand") ||
+                data.error.toLowerCase().includes("temporary") ||
+                data.error.toLowerCase().includes("unavailable")
+              )) {
+                attempts++;
+                if (attempts < maxAttempts) {
+                  let waitMs = 5000 * attempts;
+                  const match = data.error.match(/(?:try again in|retry in)\s*(\d+(\.\d+)?)/i);
+                  if (match && match[1]) {
+                    const waitSec = parseFloat(match[1]);
+                    waitMs = Math.ceil(waitSec * 1000) + 1000;
+                  }
+                  const waitSecRounded = Math.ceil(waitMs / 1000);
+                  const uiStatus = `Server busy (Retry ${attempts}/${maxAttempts} in ${waitSecRounded}s)`;
+                  setUploadQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: "processing", errorMsg: uiStatus } : q));
+                  await new Promise((resolve) => setTimeout(resolve, waitMs));
+                  continue;
+                }
+              }
+              break;
+            } catch (e: any) {
+              attempts++;
+              if (attempts < maxAttempts) {
+                setUploadQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: "processing", errorMsg: `Network retry (${attempts}/${maxAttempts})...` } : q));
+                await new Promise((resolve) => setTimeout(resolve, 3000));
+                continue;
+              }
+              data = { error: e.message || "Network request failed" };
+              break;
             }
-            data = { error: e.message || "Network request failed" };
-            break;
           }
         }
 
