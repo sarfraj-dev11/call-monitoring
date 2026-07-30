@@ -159,6 +159,67 @@ export default function TranscriptPage() {
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
 
+  // Micro-Timing Modal State & Precision Handlers
+  const [microTrimIndex, setMicroTrimIndex] = useState<number | null>(null);
+  const [microStartSec, setMicroStartSec] = useState<number>(0);
+  const [microEndSec, setMicroEndSec] = useState<number>(0);
+
+  const openMicroTrimModal = (index: number) => {
+    const item = transcriptData[index];
+    if (!item) return;
+    const tStart = timeStringToSeconds(item.time);
+    const wordCount = (item.text || "").trim().split(/\s+/).filter(Boolean).length;
+    const estimatedLen = Math.max(0.4, wordCount * 0.28);
+    let nextTime = tStart + estimatedLen;
+    if (index < transcriptData.length - 1) {
+      const nextTurn = timeStringToSeconds(transcriptData[index + 1].time);
+      if (nextTurn > tStart) nextTime = Math.min(nextTurn, tStart + estimatedLen);
+    }
+    setMicroTrimIndex(index);
+    setMicroStartSec(Math.round(tStart * 100) / 100);
+    setMicroEndSec(Math.round(nextTime * 100) / 100);
+  };
+
+  const previewMicroTrimSlice = () => {
+    if (!audioRef.current || !hasRealAudio) return;
+    audioRef.current.currentTime = microStartSec;
+    audioRef.current.play().catch(() => {});
+    const durationMs = Math.max(200, (microEndSec - microStartSec) * 1000);
+    setTimeout(() => {
+      if (audioRef.current) audioRef.current.pause();
+    }, durationMs);
+  };
+
+  const applyMicroTrim = () => {
+    if (microTrimIndex === null) return;
+    const tStart = microStartSec;
+    const tEnd = microEndSec;
+    const cutDuration = Math.max(0.1, tEnd - tStart);
+
+    deletedTimeRangesRef.current.push({ start: tStart, end: tEnd });
+
+    const updatedTranscript = transcriptData
+      .filter((_, i) => i !== microTrimIndex)
+      .map((item) => {
+        const sec = timeStringToSeconds(item.time);
+        if (sec > tStart) {
+          const newSec = Math.max(0, sec - cutDuration);
+          const hrs = Math.floor(newSec / 3600);
+          const mins = Math.floor((newSec % 3600) / 60);
+          const secs = Math.floor(newSec % 60);
+          const timeStr = `${hrs.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+          return { ...item, time: timeStr };
+        }
+        return item;
+      });
+
+    isLocalUpdateRef.current = true;
+    setTranscriptData(updatedTranscript);
+    pushToHistory(updatedTranscript);
+    persistTranscriptToDatabase(updatedTranscript);
+    setMicroTrimIndex(null);
+  };
+
   const updateUndoRedoState = () => {
     setCanUndo(historyIndexRef.current > 0);
     setCanRedo(historyIndexRef.current < historyStackRef.current.length - 1);
@@ -952,9 +1013,32 @@ export default function TranscriptPage() {
                 className={styles.progressBarContainer}
                 onClick={handleProgressBarClick}
                 ref={progressBarRef}
-                style={{ cursor: "pointer" }}
+                style={{ cursor: "pointer", position: "relative" }}
               >
-                <div className={styles.progressBarTrack}>
+                <div className={styles.progressBarTrack} style={{ position: "relative" }}>
+                  {/* Red Shaded Visual Micro-Trim Cut Regions on Timeline */}
+                  {deletedTimeRangesRef.current.map((range, rIdx) => {
+                    const leftPct = (range.start / (durationSec || 1)) * 100;
+                    const widthPct = Math.max(0.4, ((range.end - range.start) / (durationSec || 1)) * 100);
+                    return (
+                      <div
+                        key={rIdx}
+                        title={`Micro-Trimmed Cut: ${range.start.toFixed(2)}s to ${range.end.toFixed(2)}s`}
+                        style={{
+                          position: "absolute",
+                          left: `${leftPct}%`,
+                          width: `${widthPct}%`,
+                          height: "100%",
+                          background: "#ef4444",
+                          boxShadow: "0 0 6px rgba(239, 68, 68, 0.8)",
+                          borderRadius: "2px",
+                          zIndex: 3,
+                          pointerEvents: "none"
+                        }}
+                      />
+                    );
+                  })}
+
                   <div 
                     className={styles.progressBarProgress} 
                     style={{ width: `${(currentTime / (durationSec || 1)) * 100}%` }}
@@ -1171,6 +1255,30 @@ export default function TranscriptPage() {
                             <span>{renderHighlightedText(message.text)}</span>
                             <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
                               <button 
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openMicroTrimModal(idx);
+                                }}
+                                title="Micro-trim timing with sliders (+0.1s / -0.1s)"
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "4px",
+                                  background: "#fef3c7",
+                                  border: "1px solid #fde68a",
+                                  color: "#d97706",
+                                  cursor: "pointer",
+                                  padding: "4px 8px",
+                                  borderRadius: "6px",
+                                  fontSize: "11px",
+                                  fontWeight: 600,
+                                  transition: "all 0.2s ease"
+                                }}
+                              >
+                                ✂️ Micro-Trim
+                              </button>
+                              <button 
                                 className={styles.editTranscriptBtn}
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -1227,6 +1335,169 @@ export default function TranscriptPage() {
           </>
         )}
       </main>
+
+      {/* Interactive Micro-Timing Precision Modal & Slider */}
+      {microTrimIndex !== null && (
+        <div style={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          width: "100vw",
+          height: "100vh",
+          background: "rgba(0, 0, 0, 0.65)",
+          backdropFilter: "blur(6px)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          zIndex: 9999,
+          padding: "20px"
+        }}>
+          <div style={{
+            background: "#18181b",
+            border: "1px solid #27272a",
+            borderRadius: "16px",
+            width: "100%",
+            maxWidth: "540px",
+            padding: "28px",
+            boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.7)",
+            color: "#ffffff",
+            display: "flex",
+            flexDirection: "column",
+            gap: "20px"
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <h3 style={{ margin: 0, fontSize: "18px", fontWeight: 700, color: "#f4f4f5" }}>
+                ✂️ Micro-Timing Precision Trimmer
+              </h3>
+              <button 
+                onClick={() => setMicroTrimIndex(null)}
+                style={{ background: "transparent", border: "none", color: "#a1a1aa", fontSize: "20px", cursor: "pointer" }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ background: "#27272a", borderRadius: "10px", padding: "14px", fontSize: "13.5px", color: "#e4e4e7", lineHeight: 1.5 }}>
+              <span style={{ fontSize: "11px", fontWeight: 700, textTransform: "uppercase", color: "#f59e0b", display: "block", marginBottom: "4px" }}>Target Line:</span>
+              "{transcriptData[microTrimIndex]?.text}"
+            </div>
+
+            {/* Micro Timing Range Sliders & Inputs */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+              {/* Start Time Controls */}
+              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", color: "#a1a1aa", fontWeight: 600 }}>
+                  <span>TRIM START TIME</span>
+                  <span style={{ color: "#3b82f6" }}>{microStartSec.toFixed(2)}s</span>
+                </div>
+                <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                  <button 
+                    type="button"
+                    onClick={() => setMicroStartSec(prev => Math.max(0, Math.round((prev - 0.1) * 100) / 100))}
+                    style={{ background: "#3f3f46", border: "none", color: "#ffffff", padding: "6px 12px", borderRadius: "6px", fontWeight: 700, cursor: "pointer" }}
+                  >-0.1s</button>
+                  <input 
+                    type="range"
+                    min={Math.max(0, microStartSec - 5)}
+                    max={microEndSec - 0.1}
+                    step={0.05}
+                    value={microStartSec}
+                    onChange={(e) => setMicroStartSec(parseFloat(e.target.value))}
+                    style={{ flexGrow: 1, accentColor: "#3b82f6", cursor: "pointer" }}
+                  />
+                  <button 
+                    type="button"
+                    onClick={() => setMicroStartSec(prev => Math.min(microEndSec - 0.1, Math.round((prev + 0.1) * 100) / 100))}
+                    style={{ background: "#3f3f46", border: "none", color: "#ffffff", padding: "6px 12px", borderRadius: "6px", fontWeight: 700, cursor: "pointer" }}
+                  >+0.1s</button>
+                </div>
+              </div>
+
+              {/* End Time Controls */}
+              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", color: "#a1a1aa", fontWeight: 600 }}>
+                  <span>TRIM END TIME</span>
+                  <span style={{ color: "#ef4444" }}>{microEndSec.toFixed(2)}s</span>
+                </div>
+                <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                  <button 
+                    type="button"
+                    onClick={() => setMicroEndSec(prev => Math.max(microStartSec + 0.1, Math.round((prev - 0.1) * 100) / 100))}
+                    style={{ background: "#3f3f46", border: "none", color: "#ffffff", padding: "6px 12px", borderRadius: "6px", fontWeight: 700, cursor: "pointer" }}
+                  >-0.1s</button>
+                  <input 
+                    type="range"
+                    min={microStartSec + 0.1}
+                    max={microEndSec + 5}
+                    step={0.05}
+                    value={microEndSec}
+                    onChange={(e) => setMicroEndSec(parseFloat(e.target.value))}
+                    style={{ flexGrow: 1, accentColor: "#ef4444", cursor: "pointer" }}
+                  />
+                  <button 
+                    type="button"
+                    onClick={() => setMicroEndSec(prev => Math.round((prev + 0.1) * 100) / 100)}
+                    style={{ background: "#3f3f46", border: "none", color: "#ffffff", padding: "6px 12px", borderRadius: "6px", fontWeight: 700, cursor: "pointer" }}
+                  >+0.1s</button>
+                </div>
+              </div>
+            </div>
+
+            {/* Total Micro Cut Duration Summary */}
+            <div style={{ background: "#09090b", borderRadius: "8px", padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontSize: "12px", color: "#a1a1aa", fontWeight: 600 }}>EXACT CUT DURATION:</span>
+              <span style={{ fontSize: "15px", fontWeight: 700, color: "#10b981" }}>{(microEndSec - microStartSec).toFixed(2)} seconds</span>
+            </div>
+
+            {/* Action Buttons */}
+            <div style={{ display: "flex", gap: "12px", marginTop: "8px" }}>
+              <button 
+                type="button"
+                onClick={previewMicroTrimSlice}
+                style={{
+                  flex: 1,
+                  background: "#2563eb",
+                  color: "#ffffff",
+                  border: "none",
+                  padding: "10px",
+                  borderRadius: "8px",
+                  fontWeight: 600,
+                  fontSize: "13px",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "6px"
+                }}
+              >
+                ▶️ Preview Cut Slice
+              </button>
+              <button 
+                type="button"
+                onClick={applyMicroTrim}
+                style={{
+                  flex: 1,
+                  background: "linear-gradient(135deg, #ef4444 0%, #dc2626 100%)",
+                  color: "#ffffff",
+                  border: "none",
+                  padding: "10px",
+                  borderRadius: "8px",
+                  fontWeight: 600,
+                  fontSize: "13px",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "6px",
+                  boxShadow: "0 4px 12px rgba(239, 68, 68, 0.4)"
+                }}
+              >
+                ✂️ Apply Precision Cut
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
