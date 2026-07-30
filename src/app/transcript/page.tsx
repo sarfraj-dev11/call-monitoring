@@ -148,9 +148,10 @@ export default function TranscriptPage() {
   const progressBarRef = useRef<HTMLDivElement>(null);
   const activeRowRef = useRef<HTMLDivElement>(null);
 
-  // Ref to prevent onSnapshot from overwriting local user edits & undo/redo stack
+  // Ref & State for automatic visual timeline progress bar shading
   const isLocalUpdateRef = useRef(false);
   const deletedTimeRangesRef = useRef<Array<{ start: number; end: number }>>([]);
+  const [deletedRangesState, setDeletedRangesState] = useState<Array<{ start: number; end: number }>>([]);
 
   // Bulletproof Undo / Redo History Management using Refs + React State
   const historyStackRef = useRef<Array<{ transcript: any[]; audioSrc: string }>>([]);
@@ -446,6 +447,7 @@ export default function TranscriptPage() {
 
         if (Array.isArray(activeCall.deletedRanges)) {
           deletedTimeRangesRef.current = activeCall.deletedRanges;
+          setDeletedRangesState([...activeCall.deletedRanges]);
         }
 
         // Restore history stack from localStorage if available after page refresh
@@ -458,6 +460,7 @@ export default function TranscriptPage() {
               historyIndexRef.current = savedHist.index ?? 0;
               if (Array.isArray(savedHist.ranges)) {
                 deletedTimeRangesRef.current = savedHist.ranges;
+                setDeletedRangesState([...savedHist.ranges]);
               }
               updateUndoRedoState();
             }
@@ -636,8 +639,9 @@ export default function TranscriptPage() {
     const cutDuration = Math.min(wordDuration, maxGap);
     const tEnd = tStart + cutDuration;
 
-    // Track deleted time range for instant playback skipping
+    // Track deleted time range for instant playback skipping & automatic progress bar shading
     deletedTimeRangesRef.current.push({ start: tStart, end: tEnd });
+    setDeletedRangesState([...deletedTimeRangesRef.current]);
 
     // 1. Shift remaining transcript timestamps backwards by cutDuration
     const updatedTranscript = transcriptData
@@ -1017,7 +1021,7 @@ export default function TranscriptPage() {
               >
                 <div className={styles.progressBarTrack} style={{ position: "relative" }}>
                   {/* Red Shaded Visual Micro-Trim Cut Regions on Timeline */}
-                  {deletedTimeRangesRef.current.map((range, rIdx) => {
+                  {deletedRangesState.map((range, rIdx) => {
                     const leftPct = (range.start / (durationSec || 1)) * 100;
                     const widthPct = Math.max(0.4, ((range.end - range.start) / (durationSec || 1)) * 100);
                     return (
