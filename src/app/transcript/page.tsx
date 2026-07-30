@@ -164,6 +164,13 @@ export default function TranscriptPage() {
     setCanRedo(historyIndexRef.current < historyStackRef.current.length - 1);
   };
 
+  const saveHistoryToStorage = (callId: string, stack: any[], index: number, ranges: any[]) => {
+    if (!callId) return;
+    try {
+      localStorage.setItem(`history_stack_${callId}`, JSON.stringify({ stack, index, ranges }));
+    } catch (e) {}
+  };
+
   const pushToHistory = (newTranscript: any[], newAudioSrc?: string) => {
     const src = newAudioSrc || audioSrc;
     const currentStack = historyStackRef.current;
@@ -175,6 +182,7 @@ export default function TranscriptPage() {
     historyStackRef.current = updated;
     historyIndexRef.current = updated.length - 1;
     updateUndoRedoState();
+    saveHistoryToStorage(activeCallId, updated, updated.length - 1, deletedTimeRangesRef.current);
   };
 
   const handleUndo = () => {
@@ -193,6 +201,7 @@ export default function TranscriptPage() {
       }
       persistTranscriptToDatabase(state.transcript, state.audioSrc);
       updateUndoRedoState();
+      saveHistoryToStorage(activeCallId, historyStackRef.current, historyIndexRef.current, deletedTimeRangesRef.current);
     }
   };
 
@@ -212,6 +221,7 @@ export default function TranscriptPage() {
       }
       persistTranscriptToDatabase(state.transcript, state.audioSrc);
       updateUndoRedoState();
+      saveHistoryToStorage(activeCallId, historyStackRef.current, historyIndexRef.current, deletedTimeRangesRef.current);
     }
   };
 
@@ -222,6 +232,7 @@ export default function TranscriptPage() {
       const callRef = doc(db, "calls", activeCallId);
       await updateDoc(callRef, {
         transcript: transcriptToSave,
+        deletedRanges: deletedTimeRangesRef.current || [],
         ...(audioUrlToSave ? { audioUrl: audioUrlToSave } : {})
       });
     } catch (e) {
@@ -238,6 +249,7 @@ export default function TranscriptPage() {
             return {
               ...c,
               transcript: transcriptToSave,
+              deletedRanges: deletedTimeRangesRef.current || [],
               ...(audioUrlToSave ? { audioUrl: audioUrlToSave } : {})
             };
           }
@@ -327,7 +339,25 @@ export default function TranscriptPage() {
           setHasRealAudio(false);
         }
 
-        if (historyStackRef.current.length === 0) {
+        if (Array.isArray(activeCall.deletedRanges)) {
+          deletedTimeRangesRef.current = activeCall.deletedRanges;
+        }
+
+        // Restore history stack from localStorage if available after page refresh
+        const savedHistoryStr = localStorage.getItem(`history_stack_${activeId}`);
+        if (savedHistoryStr) {
+          try {
+            const savedHist = JSON.parse(savedHistoryStr);
+            if (savedHist.stack && savedHist.stack.length > 0) {
+              historyStackRef.current = savedHist.stack;
+              historyIndexRef.current = savedHist.index ?? 0;
+              if (Array.isArray(savedHist.ranges)) {
+                deletedTimeRangesRef.current = savedHist.ranges;
+              }
+              updateUndoRedoState();
+            }
+          } catch (e) {}
+        } else if (historyStackRef.current.length === 0) {
           historyStackRef.current = [{ transcript: JSON.parse(JSON.stringify(initialTranscript)), audioSrc: audioFileUrl || "" }];
           historyIndexRef.current = 0;
           updateUndoRedoState();
