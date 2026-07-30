@@ -343,9 +343,19 @@ export default function Home() {
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const isCancelledRef = useRef<boolean>(false);
+  const currentUploadTaskRef = useRef<any>(null);
 
   const handleCancelTranscription = () => {
+    console.log("Stop Call requested by user. Aborting all operations...");
     isCancelledRef.current = true;
+    if (currentUploadTaskRef.current) {
+      try {
+        currentUploadTaskRef.current.cancel();
+      } catch (e) {
+        console.warn("Upload task cancel notice:", e);
+      }
+      currentUploadTaskRef.current = null;
+    }
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
@@ -681,10 +691,12 @@ export default function Home() {
         let uploadedAudioUrl = "";
 
         try {
+          if (isCancelledRef.current) break;
           const cleanFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
           const storagePath = `calls/${Date.now()}_${cleanFileName}`;
           const storageRef = ref(storage, storagePath);
           const uploadTask = uploadBytesResumable(storageRef, file);
+          currentUploadTaskRef.current = uploadTask;
 
           uploadedAudioUrl = await new Promise<string>((resolve, reject) => {
             uploadTask.on(
@@ -703,14 +715,17 @@ export default function Home() {
               }
             );
           });
+          currentUploadTaskRef.current = null;
         } catch (corsErr) {
+          if (isCancelledRef.current) break;
           console.log("Client upload encountered CORS/Network restriction. Falling back to server-side Firebase upload proxy...");
           const uploadFormData = new FormData();
           uploadFormData.append("file", file);
 
           const proxyRes = await fetch("/api/upload-audio", {
             method: "POST",
-            body: uploadFormData
+            body: uploadFormData,
+            signal: abortControllerRef.current?.signal
           });
 
           if (!proxyRes.ok) {
@@ -724,6 +739,7 @@ export default function Home() {
           setUploadProgress(100);
         }
 
+        if (isCancelledRef.current) break;
         sessionStorage.setItem("active_audio_blob_url", uploadedAudioUrl);
 
         // Step 2: Request transcription from server using tiny ~200 byte JSON payload containing Firebase Storage URL!
@@ -736,6 +752,7 @@ export default function Home() {
         const maxAttempts = 5;
 
         while (attempts < maxAttempts) {
+          if (isCancelledRef.current) break;
           try {
             response = await fetch("/api/transcribe", {
               method: "POST",
@@ -745,6 +762,7 @@ export default function Home() {
                 fileName: file.name,
                 durationSec
               }),
+              signal: abortControllerRef.current?.signal
             });
 
             if (!response.ok) {
@@ -835,7 +853,7 @@ export default function Home() {
         }
 
         // Step 3: Auto AI Evaluation (Skipped if AI is paused)
-        if (!isAiPaused) {
+        if (!isAiPaused && !isCancelledRef.current) {
           setPipelineStep(3);
           const evalStartMs = Date.now();
           let evalData: any = null;
@@ -847,7 +865,8 @@ export default function Home() {
               body: JSON.stringify({
                 transcript: data.transcript,
                 agentName: data.agentName || "Rahul M."
-              })
+              }),
+              signal: abortControllerRef.current?.signal
             });
 
             if (evalRes.ok) {
