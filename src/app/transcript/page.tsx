@@ -514,22 +514,16 @@ export default function TranscriptPage() {
     if (!lineToDelete) return;
 
     const tStart = timeStringToSeconds(lineToDelete.time);
-    
-    // Calculate exact sentence duration based on word count (~0.32s per word, min 1s)
-    const wordCount = (lineToDelete.text || "").trim().split(/\s+/).filter(Boolean).length;
-    const wordDuration = Math.max(1.0, Math.min(10.0, wordCount * 0.32));
+    let tEnd = tStart + 4.0;
 
-    let maxGap = 5.0;
     if (index < transcriptData.length - 1) {
       const nextTime = timeStringToSeconds(transcriptData[index + 1].time);
       if (nextTime > tStart) {
-        maxGap = nextTime - tStart;
+        tEnd = nextTime;
       }
     }
 
-    // Cut ONLY the exact sentence duration so neighboring words in the next line remain 100% untouched!
-    const cutDuration = Math.min(wordDuration, maxGap);
-    const tEnd = tStart + cutDuration;
+    const cutDuration = tEnd - tStart;
 
     // Track deleted time range for instant playback skipping
     deletedTimeRangesRef.current.push({ start: tStart, end: tEnd });
@@ -698,11 +692,12 @@ export default function TranscriptPage() {
   const handleAudioTimeUpdate = () => {
     if (audioRef.current && hasRealAudio) {
       const cur = audioRef.current.currentTime;
-      // Skip over any deleted line time ranges instantly
+      // Skip over any deleted line time ranges instantly with clean margin
       for (const range of deletedTimeRangesRef.current) {
-        if (cur >= range.start - 0.05 && cur < range.end) {
-          audioRef.current.currentTime = range.end;
-          setCurrentTime(range.end);
+        if (cur >= range.start - 0.02 && cur < range.end) {
+          const nextValidTime = range.end + 0.05;
+          audioRef.current.currentTime = nextValidTime;
+          setCurrentTime(nextValidTime);
           return;
         }
       }
