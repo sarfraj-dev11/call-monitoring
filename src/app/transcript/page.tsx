@@ -154,7 +154,7 @@ export default function TranscriptPage() {
   const [deletedRangesState, setDeletedRangesState] = useState<Array<{ start: number; end: number }>>([]);
 
   // Bulletproof Undo / Redo History Management using Refs + React State
-  const historyStackRef = useRef<Array<{ transcript: any[]; audioSrc: string }>>([]);
+  const historyStackRef = useRef<Array<{ transcript: any[]; audioSrc: string; deletedRanges?: any[] }>>([]);
   const historyIndexRef = useRef<number>(-1);
 
   const [canUndo, setCanUndo] = useState(false);
@@ -239,7 +239,11 @@ export default function TranscriptPage() {
     const currentIndex = historyIndexRef.current;
 
     const sliced = currentIndex >= 0 ? currentStack.slice(0, currentIndex + 1) : [];
-    const updated = [...sliced, { transcript: JSON.parse(JSON.stringify(newTranscript)), audioSrc: src }];
+    const updated = [...sliced, {
+      transcript: JSON.parse(JSON.stringify(newTranscript)),
+      audioSrc: src,
+      deletedRanges: JSON.parse(JSON.stringify(deletedTimeRangesRef.current))
+    }];
 
     historyStackRef.current = updated;
     historyIndexRef.current = updated.length - 1;
@@ -254,6 +258,12 @@ export default function TranscriptPage() {
 
       isLocalUpdateRef.current = true;
       setTranscriptData(state.transcript);
+
+      // Restore deleted ranges for audio playback & visual progress bar!
+      const restoredRanges = state.deletedRanges || [];
+      deletedTimeRangesRef.current = JSON.parse(JSON.stringify(restoredRanges));
+      setDeletedRangesState(restoredRanges);
+
       if (state.audioSrc && state.audioSrc !== audioSrc) {
         setAudioSrc(state.audioSrc);
         if (audioRef.current) {
@@ -263,7 +273,7 @@ export default function TranscriptPage() {
       }
       persistTranscriptToDatabase(state.transcript, state.audioSrc);
       updateUndoRedoState();
-      saveHistoryToStorage(activeCallId, historyStackRef.current, historyIndexRef.current, deletedTimeRangesRef.current);
+      saveHistoryToStorage(activeCallId, historyStackRef.current, historyIndexRef.current, restoredRanges);
     }
   };
 
@@ -274,6 +284,12 @@ export default function TranscriptPage() {
 
       isLocalUpdateRef.current = true;
       setTranscriptData(state.transcript);
+
+      // Restore deleted ranges for audio playback & visual progress bar!
+      const restoredRanges = state.deletedRanges || [];
+      deletedTimeRangesRef.current = JSON.parse(JSON.stringify(restoredRanges));
+      setDeletedRangesState(restoredRanges);
+
       if (state.audioSrc && state.audioSrc !== audioSrc) {
         setAudioSrc(state.audioSrc);
         if (audioRef.current) {
@@ -283,7 +299,7 @@ export default function TranscriptPage() {
       }
       persistTranscriptToDatabase(state.transcript, state.audioSrc);
       updateUndoRedoState();
-      saveHistoryToStorage(activeCallId, historyStackRef.current, historyIndexRef.current, deletedTimeRangesRef.current);
+      saveHistoryToStorage(activeCallId, historyStackRef.current, historyIndexRef.current, restoredRanges);
     }
   };
 
