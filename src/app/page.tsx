@@ -468,7 +468,27 @@ export default function Home() {
                 body: formData,
               });
 
-              data = await response.json();
+              if (!response.ok) {
+                if (response.status === 413) {
+                  console.warn("HTTP 413 Payload Too Large detected. Retrying with compressed 16kHz mono WAV...");
+                  setUploadQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: "processing", errorMsg: "⚡ Auto-Compressing large audio..." } : q));
+                  const compressed = await compressAudioToMono16k(file);
+                  const retryForm = new FormData();
+                  retryForm.append("file", compressed, "compressed_audio.wav");
+                  if (durationSec > 0) retryForm.append("durationSec", durationSec.toString());
+                  const retryRes = await fetch("/api/transcribe", { method: "POST", body: retryForm });
+                  if (retryRes.ok) {
+                    data = await retryRes.json();
+                  } else {
+                    data = { error: "Audio payload exceeds maximum cloud limit even after compression." };
+                  }
+                } else {
+                  const errText = await response.text();
+                  data = { error: errText || `Server error (HTTP ${response.status})` };
+                }
+              } else {
+                data = await response.json();
+              }
 
               if (data.error && (
                 data.error.toLowerCase().includes("rate limit") ||
