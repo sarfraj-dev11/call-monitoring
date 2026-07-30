@@ -502,7 +502,14 @@ export default function TranscriptPage() {
             audioRef.current.src = trimmedBlobUrl;
             audioRef.current.load();
             if (isPlaying) {
-              audioRef.current.play().catch(e => console.error("Audio play error:", e));
+              const promise = audioRef.current.play();
+              if (promise !== undefined) {
+                promise.catch(e => {
+                  if (e.name !== "AbortError") {
+                    console.error("Audio play error:", e);
+                  }
+                });
+              }
             }
           }
 
@@ -533,8 +540,10 @@ export default function TranscriptPage() {
     setIsPlaying(false);
     setCurrentTime(0);
     if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
+      try {
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+      } catch (e) {}
     }
     loadCallData(id);
   };
@@ -543,9 +552,18 @@ export default function TranscriptPage() {
   useEffect(() => {
     if (!hasRealAudio || !audioRef.current) return;
     if (isPlaying) {
-      audioRef.current.play().catch(e => console.error("Audio play error:", e));
+      const promise = audioRef.current.play();
+      if (promise !== undefined) {
+        promise.catch(e => {
+          if (e.name !== "AbortError") {
+            console.error("Audio play error:", e);
+          }
+        });
+      }
     } else {
-      audioRef.current.pause();
+      try {
+        audioRef.current.pause();
+      } catch (e) {}
     }
   }, [isPlaying, hasRealAudio]);
 
