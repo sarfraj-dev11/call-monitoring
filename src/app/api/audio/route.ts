@@ -6,9 +6,27 @@ export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const fileName = searchParams.get("file");
+    const remoteUrl = searchParams.get("url");
+
+    if (remoteUrl) {
+      try {
+        const remoteRes = await fetch(remoteUrl);
+        const audioBuffer = await remoteRes.arrayBuffer();
+        return new NextResponse(audioBuffer, {
+          status: 200,
+          headers: {
+            "Content-Type": remoteRes.headers.get("content-type") || "audio/mpeg",
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "no-cache",
+          }
+        });
+      } catch (e: any) {
+        return NextResponse.json({ error: "Failed to fetch remote audio URL" }, { status: 500 });
+      }
+    }
 
     if (!fileName) {
-      return NextResponse.json({ error: "Filename is required" }, { status: 400 });
+      return NextResponse.json({ error: "Filename or URL is required" }, { status: 400 });
     }
 
     // Prevent directory traversal attacks

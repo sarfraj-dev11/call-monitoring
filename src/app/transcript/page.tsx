@@ -150,6 +150,7 @@ export default function TranscriptPage() {
 
   // Ref to prevent onSnapshot from overwriting local user edits & undo/redo stack
   const isLocalUpdateRef = useRef(false);
+  const deletedTimeRangesRef = useRef<Array<{ start: number; end: number }>>([]);
 
   // Bulletproof Undo / Redo History Management using Refs + React State
   const historyStackRef = useRef<Array<{ transcript: any[]; audioSrc: string }>>([]);
@@ -494,6 +495,9 @@ export default function TranscriptPage() {
 
     const cutDuration = tEnd - tStart;
 
+    // Track deleted time range for instant playback skipping
+    deletedTimeRangesRef.current.push({ start: tStart, end: tEnd });
+
     // 1. Shift remaining transcript timestamps backwards by cutDuration
     const updatedTranscript = transcriptData
       .filter((_, i) => i !== index)
@@ -520,7 +524,11 @@ export default function TranscriptPage() {
     if (hasRealAudio && audioSrc) {
       setTimeout(async () => {
         try {
-          const response = await fetch(audioSrc);
+          // Use CORS proxy for remote Firebase URLs to prevent fetch CORS errors
+          const proxyUrl = audioSrc.startsWith("http") && !audioSrc.includes("/api/audio")
+            ? `/api/audio?url=${encodeURIComponent(audioSrc)}`
+            : audioSrc;
+          const response = await fetch(proxyUrl);
           const arrayBuffer = await response.arrayBuffer();
           const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
           const audioCtx = new AudioContextClass();
@@ -653,7 +661,16 @@ export default function TranscriptPage() {
 
   const handleAudioTimeUpdate = () => {
     if (audioRef.current && hasRealAudio) {
-      setCurrentTime(audioRef.current.currentTime);
+      const cur = audioRef.current.currentTime;
+      // Skip over any deleted line time ranges instantly
+      for (const range of deletedTimeRangesRef.current) {
+        if (cur >= range.start - 0.05 && cur < range.end) {
+          audioRef.current.currentTime = range.end;
+          setCurrentTime(range.end);
+          return;
+        }
+      }
+      setCurrentTime(cur);
     }
   };
 
