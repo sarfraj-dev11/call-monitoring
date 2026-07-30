@@ -420,44 +420,47 @@ export default function TranscriptPage() {
           }
 
           const wavBlob = audioBufferToWavBlob(trimmedBuffer);
-          
-          // Convert Blob to Data URL for permanent database & audio element binding
-          const reader = new FileReader();
-          reader.onloadend = () => {
-            const dataUrl = reader.result as string;
-            setAudioSrc(dataUrl);
-            setHasBeenTrimmed(true);
-            setDurationSec(Math.round(trimmedBuffer.duration));
-            sessionStorage.setItem("active_audio_blob_url", dataUrl);
+          const trimmedBlobUrl = URL.createObjectURL(wavBlob);
 
-            if (audioRef.current) {
-              audioRef.current.src = dataUrl;
-              audioRef.current.load();
-            }
+          setAudioSrc(trimmedBlobUrl);
+          setHasBeenTrimmed(true);
+          setDurationSec(Math.round(trimmedBuffer.duration));
 
-            // Save trimmed audio into localStorage database
-            const storedDb = localStorage.getItem("all_calls_database");
-            if (storedDb && activeCallId) {
-              try {
-                const db = JSON.parse(storedDb);
-                const updatedDb = db.map((c: any) => {
-                  if (c.id === activeCallId) {
-                    return {
-                      ...c,
-                      transcript: updatedTranscript,
-                      audioUrl: dataUrl,
-                      durationSec: Math.round(trimmedBuffer.duration)
-                    };
-                  }
-                  return c;
-                });
-                localStorage.setItem("all_calls_database", JSON.stringify(updatedDb));
-              } catch (e) {
-                console.error("Failed to save trimmed audio", e);
-              }
+          if (audioRef.current) {
+            audioRef.current.src = trimmedBlobUrl;
+            audioRef.current.load();
+            if (isPlaying) {
+              audioRef.current.play().catch(e => console.error("Audio play error:", e));
             }
-          };
-          reader.readAsDataURL(wavBlob);
+          }
+
+          try {
+            sessionStorage.setItem("active_audio_blob_url", trimmedBlobUrl);
+          } catch (e) {
+            console.warn("Storage quota limit safely caught");
+          }
+
+          // Save trimmed transcript to database
+          const storedDb = localStorage.getItem("all_calls_database");
+          if (storedDb && activeCallId) {
+            try {
+              const db = JSON.parse(storedDb);
+              const updatedDb = db.map((c: any) => {
+                if (c.id === activeCallId) {
+                  return {
+                    ...c,
+                    transcript: updatedTranscript,
+                    audioUrl: trimmedBlobUrl,
+                    durationSec: Math.round(trimmedBuffer.duration)
+                  };
+                }
+                return c;
+              });
+              localStorage.setItem("all_calls_database", JSON.stringify(updatedDb));
+            } catch (e) {
+              console.warn("Database storage quota safely handled");
+            }
+          }
           return;
         }
       } catch (audioErr) {
