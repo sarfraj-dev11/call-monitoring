@@ -436,10 +436,10 @@
 }
 
 .activeRow {
-  background: linear-gradient(90deg, #fff7ed 0%, #fef3c7 100%) !important;
+  background: linear-gradient(90deg, #ecfdf5 0%, #d1fae5 100%) !important;
   border-radius: 10px;
-  border-left: 5px solid #f59e0b !important;
-  box-shadow: 0 4px 14px rgba(245, 158, 11, 0.22), 0 1px 3px rgba(0, 0, 0, 0.06);
+  border-left: 5px solid #10b981 !important;
+  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.25), 0 1px 3px rgba(0, 0, 0, 0.06);
   padding: 10px 14px 10px 12px !important;
   margin-left: -12px !important;
   margin-right: -12px !important;
@@ -448,10 +448,10 @@
 
 .activeRow .messageText {
   font-weight: 600 !important;
-  color: #18181b !important;
+  color: #064e3b !important;
 }
 
 .activeRow .messageTime {
-  color: #d97706 !important;
+  color: #059669 !important;
   font-weight: 700 !important;
 }
