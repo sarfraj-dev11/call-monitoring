@@ -39,6 +39,63 @@ const timeStringToSeconds = (timeStr: string): number => {
   return 0;
 };
 
+// Helper to convert AudioBuffer to WAV Blob for downloading trimmed calls
+function audioBufferToWavBlob(buffer: AudioBuffer): Blob {
+  const numOfChan = buffer.numberOfChannels;
+  const length = buffer.length * numOfChan * 2 + 44;
+  const out = new DataView(new ArrayBuffer(length));
+  let channels: Float32Array[] = [];
+  let sampleRate = buffer.sampleRate;
+  let offset = 0;
+  let pos = 0;
+
+  function writeString(str: string) {
+    for (let i = 0; i < str.length; i++) {
+      out.setUint8(pos++, str.charCodeAt(i));
+    }
+  }
+
+  function setUint16(data: number) {
+    out.setUint16(pos, data, true);
+    pos += 2;
+  }
+
+  function setUint32(data: number) {
+    out.setUint32(pos, data, true);
+    pos += 4;
+  }
+
+  writeString('RIFF');
+  setUint32(length - 8);
+  writeString('WAVE');
+  writeString('fmt ');
+  setUint32(16);
+  setUint16(1);
+  setUint16(numOfChan);
+  setUint32(sampleRate);
+  setUint32(sampleRate * 2 * numOfChan);
+  setUint16(numOfChan * 2);
+  setUint16(16);
+  writeString('data');
+  setUint32(length - pos - 4);
+
+  for (let i = 0; i < buffer.numberOfChannels; i++) {
+    channels.push(buffer.getChannelData(i));
+  }
+
+  while (offset < buffer.length) {
+    for (let i = 0; i < numOfChan; i++) {
+      let sample = Math.max(-1, Math.min(1, channels[i][offset]));
+      sample = (0.5 + sample < 0 ? sample * 32768 : sample * 32767) | 0;
+      out.setInt16(pos, sample, true);
+      pos += 2;
+    }
+    offset++;
+  }
+
+  return new Blob([out], { type: 'audio/wav' });
+}
+
 export default function TranscriptPage() {
   const router = useRouter();
   const [isEvaluating, setIsEvaluating] = useState(false);
@@ -59,6 +116,7 @@ export default function TranscriptPage() {
   // Editing state
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editingText, setEditingText] = useState("");
+  const [hasBeenTrimmed, setHasBeenTrimmed] = useState(false);
 
   // Playback state
   const [audioSrc, setAudioSrc] = useState<string>("");
@@ -276,6 +334,94 @@ export default function TranscriptPage() {
 
     setEditingIndex(null);
     setEditingText("");
+  };
+
+  const deleteTranscriptLine = async (index: number) => {
+    const lineToDelete = transcriptData[index];
+    if (!lineToDelete) return;
+
+    const tStart = timeStringToSeconds(lineToDelete.time);
+    let tEnd = tStart + 4;
+    if (index < transcriptData.length - 1) {
+      const nextTime = timeStringToSeconds(transcriptData[index + 1].time);
+      if (nextTime > tStart) {
+        tEnd = nextTime;
+      }
+    }
+    if (tEnd <= tStart) tEnd = tStart + 3;
+
+    // 1. Remove line from transcript
+    const updatedTranscript = transcriptData.filter((_, i) => i !== index);
+    setTranscriptData(updatedTranscript);
+
+    // 2. Real-Time Web Audio Buffer Trimming
+    if (hasRealAudio && audioSrc) {
+      try {
+        const response = await fetch(audioSrc);
+        const arrayBuffer = await response.arrayBuffer();
+        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        const audioCtx = new AudioContextClass();
+        const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+
+        const sampleRate = audioBuffer.sampleRate;
+        const channels = audioBuffer.numberOfChannels;
+        const totalSamples = audioBuffer.length;
+
+        const cutStartSample = Math.max(0, Math.floor(tStart * sampleRate));
+        const cutEndSample = Math.min(totalSamples, Math.ceil(tEnd * sampleRate));
+        const cutSampleLength = cutEndSample - cutStartSample;
+
+        if (totalSamples - cutSampleLength > 0) {
+          const trimmedBuffer = audioCtx.createBuffer(channels, totalSamples - cutSampleLength, sampleRate);
+          for (let channel = 0; channel < channels; channel++) {
+            const oldData = audioBuffer.getChannelData(channel);
+            const newData = trimmedBuffer.getChannelData(channel);
+            // Part 1: before cut
+            if (cutStartSample > 0) {
+              newData.set(oldData.subarray(0, cutStartSample), 0);
+            }
+            // Part 2: after cut
+            if (cutEndSample < totalSamples) {
+              newData.set(oldData.subarray(cutEndSample, totalSamples), cutStartSample);
+            }
+          }
+
+          const wavBlob = audioBufferToWavBlob(trimmedBuffer);
+          const trimmedUrl = URL.createObjectURL(wavBlob);
+
+          setAudioSrc(trimmedUrl);
+          setHasBeenTrimmed(true);
+          setDurationSec(Math.round(trimmedBuffer.duration));
+          sessionStorage.setItem("active_audio_blob_url", trimmedUrl);
+
+          if (audioRef.current) {
+            audioRef.current.src = trimmedUrl;
+          }
+        }
+      } catch (audioErr) {
+        console.error("Failed to trim audio buffer on line deletion:", audioErr);
+      }
+    }
+
+    // 3. Save updated transcript to database
+    const storedDb = localStorage.getItem("all_calls_database");
+    if (storedDb && activeCallId) {
+      try {
+        const db = JSON.parse(storedDb);
+        const updatedDb = db.map((c: any) => {
+          if (c.id === activeCallId) {
+            return {
+              ...c,
+              transcript: updatedTranscript
+            };
+          }
+          return c;
+        });
+        localStorage.setItem("all_calls_database", JSON.stringify(updatedDb));
+      } catch (e) {
+        console.error("Failed to save deleted transcript", e);
+      }
+    }
   };
 
   useEffect(() => {
@@ -578,25 +724,50 @@ export default function TranscriptPage() {
                 <option value={2.0}>2.0x</option>
               </select>
 
-              {hasRealAudio ? (
-                <a 
-                  className={styles.downloadButton} 
-                  href={audioSrc}
-                  download="call-audio.mp3"
-                  aria-label="Download audio"
-                >
-                  <DownloadIcon />
-                </a>
-              ) : (
-                <button 
-                  className={styles.downloadButton} 
-                  style={{ opacity: 0.5, cursor: "not-allowed" }}
-                  title="No audio file source available to download"
-                  disabled
-                >
-                  <DownloadIcon />
-                </button>
-              )}
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                {hasBeenTrimmed && hasRealAudio && (
+                  <a
+                    href={audioSrc}
+                    download={`trimmed_call_${activeCallId}.wav`}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      padding: "6px 12px",
+                      borderRadius: "20px",
+                      background: "linear-gradient(135deg, #ef4444 0%, #b91c1c 100%)",
+                      color: "#ffffff",
+                      fontSize: "12px",
+                      fontWeight: 600,
+                      textDecoration: "none",
+                      boxShadow: "0 2px 6px rgba(239, 68, 68, 0.3)"
+                    }}
+                    title="Download audio call with deleted lines trimmed out"
+                  >
+                    ✂️ Download Trimmed Audio
+                  </a>
+                )}
+                {hasRealAudio ? (
+                  <a 
+                    className={styles.downloadButton} 
+                    href={audioSrc}
+                    download={hasBeenTrimmed ? `trimmed_call_${activeCallId}.wav` : "call-audio.mp3"}
+                    aria-label="Download audio"
+                    title={hasBeenTrimmed ? "Download trimmed audio call" : "Download original audio call"}
+                  >
+                    <DownloadIcon />
+                  </a>
+                ) : (
+                  <button 
+                    className={styles.downloadButton} 
+                    style={{ opacity: 0.5, cursor: "not-allowed" }}
+                    title="No audio file source available to download"
+                    disabled
+                  >
+                    <DownloadIcon />
+                  </button>
+                )}
+              </div>
             </section>
 
             {/* Full Transcript Area */}
@@ -678,16 +849,40 @@ export default function TranscriptPage() {
                         ) : (
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
                             <span>{renderHighlightedText(message.text)}</span>
-                            <button 
-                              className={styles.editTranscriptBtn}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                startEditing(idx, message.text);
-                              }}
-                              title="Edit transcript line"
-                            >
-                              ✏️
-                            </button>
+                            <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                              <button 
+                                className={styles.editTranscriptBtn}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  startEditing(idx, message.text);
+                                }}
+                                title="Edit transcript line"
+                              >
+                                ✏️
+                              </button>
+                              <button 
+                                type="button"
+                                className={styles.deleteTranscriptBtn}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  deleteTranscriptLine(idx);
+                                }}
+                                title="Delete line and cut audio from call"
+                                style={{
+                                  background: "#fee2e2",
+                                  border: "1px solid #fecaca",
+                                  color: "#dc2626",
+                                  cursor: "pointer",
+                                  fontSize: "12px",
+                                  padding: "3px 8px",
+                                  borderRadius: "6px",
+                                  fontWeight: 600,
+                                  transition: "all 0.2s ease"
+                                }}
+                              >
+                                🗑️
+                              </button>
+                            </div>
                           </div>
                         )}
                       </div>
