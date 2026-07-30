@@ -148,6 +148,9 @@ export default function TranscriptPage() {
   const progressBarRef = useRef<HTMLDivElement>(null);
   const activeRowRef = useRef<HTMLDivElement>(null);
 
+  // Ref to prevent onSnapshot from overwriting local user edits & undo/redo stack
+  const isLocalUpdateRef = useRef(false);
+
   // Bulletproof Undo / Redo History Management using Refs + React State
   const historyStackRef = useRef<Array<{ transcript: any[]; audioSrc: string }>>([]);
   const historyIndexRef = useRef<number>(-1);
@@ -178,6 +181,7 @@ export default function TranscriptPage() {
       historyIndexRef.current = historyIndexRef.current - 1;
       const state = historyStackRef.current[historyIndexRef.current];
 
+      isLocalUpdateRef.current = true;
       setTranscriptData(state.transcript);
       if (state.audioSrc && state.audioSrc !== audioSrc) {
         setAudioSrc(state.audioSrc);
@@ -196,6 +200,7 @@ export default function TranscriptPage() {
       historyIndexRef.current = historyIndexRef.current + 1;
       const state = historyStackRef.current[historyIndexRef.current];
 
+      isLocalUpdateRef.current = true;
       setTranscriptData(state.transcript);
       if (state.audioSrc && state.audioSrc !== audioSrc) {
         setAudioSrc(state.audioSrc);
@@ -243,6 +248,42 @@ export default function TranscriptPage() {
     }
   };
 
+  const handleDownloadTranscript = () => {
+    if (!transcriptData || transcriptData.length === 0) return;
+    const textContent = transcriptData
+      .map(t => `[${t.time}] ${t.speaker}: ${t.text}`)
+      .join("\n\n");
+    const blob = new Blob([textContent], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `trimmed_transcript_${activeCallId || "call"}.txt`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadAudio = async () => {
+    if (!audioSrc) return;
+    try {
+      const res = await fetch(audioSrc);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      const extension = hasBeenTrimmed ? "wav" : (audioSrc.includes(".mp3") ? "mp3" : "wav");
+      link.download = `trimmed_call_${activeCallId || "audio"}.${extension}`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error("Audio download error:", e);
+      window.open(audioSrc, "_blank");
+    }
+  };
+
   const loadCallData = (selectedId?: string) => {
     const activeId = selectedId || localStorage.getItem("active_call_id");
     if (!activeId) return;
@@ -252,6 +293,11 @@ export default function TranscriptPage() {
 
     // Real-Time Listener on active call document in Firestore
     const unsubscribe = onSnapshot(doc(db, "calls", activeId), (docSnap) => {
+      if (isLocalUpdateRef.current) {
+        isLocalUpdateRef.current = false;
+        return;
+      }
+
       if (docSnap.exists()) {
         setHasData(true);
         const activeCall = { id: docSnap.id, ...docSnap.data() } as any;
@@ -423,6 +469,7 @@ export default function TranscriptPage() {
       ...updatedTranscript[index],
       text: editingText
     };
+    isLocalUpdateRef.current = true;
     setTranscriptData(updatedTranscript);
     pushToHistory(updatedTranscript);
     persistTranscriptToDatabase(updatedTranscript);
@@ -464,6 +511,7 @@ export default function TranscriptPage() {
       });
 
     // ⚡ INSTANT UI & UNDO UPDATE (< 1ms)! Zero lag!
+    isLocalUpdateRef.current = true;
     setTranscriptData(updatedTranscript);
     pushToHistory(updatedTranscript);
     persistTranscriptToDatabase(updatedTranscript);
@@ -827,46 +875,51 @@ export default function TranscriptPage() {
               </select>
 
               <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                {hasBeenTrimmed && hasRealAudio && (
-                  <a
-                    href={audioSrc}
-                    download={`trimmed_call_${activeCallId}.wav`}
+                <button
+                  type="button"
+                  onClick={handleDownloadTranscript}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    padding: "6px 12px",
+                    borderRadius: "20px",
+                    background: "#3b82f6",
+                    color: "#ffffff",
+                    fontSize: "12px",
+                    fontWeight: 600,
+                    border: "none",
+                    cursor: "pointer",
+                    boxShadow: "0 2px 6px rgba(59, 130, 246, 0.3)",
+                    transition: "all 0.2s ease"
+                  }}
+                  title="Download transcript text file"
+                >
+                  📄 Download Transcript
+                </button>
+
+                {hasRealAudio && (
+                  <button
+                    type="button"
+                    onClick={handleDownloadAudio}
                     style={{
                       display: "inline-flex",
                       alignItems: "center",
                       gap: "6px",
                       padding: "6px 12px",
                       borderRadius: "20px",
-                      background: "linear-gradient(135deg, #ef4444 0%, #b91c1c 100%)",
+                      background: hasBeenTrimmed ? "linear-gradient(135deg, #ef4444 0%, #b91c1c 100%)" : "#10b981",
                       color: "#ffffff",
                       fontSize: "12px",
                       fontWeight: 600,
-                      textDecoration: "none",
-                      boxShadow: "0 2px 6px rgba(239, 68, 68, 0.3)"
+                      border: "none",
+                      cursor: "pointer",
+                      boxShadow: hasBeenTrimmed ? "0 2px 6px rgba(239, 68, 68, 0.3)" : "0 2px 6px rgba(16, 185, 129, 0.3)",
+                      transition: "all 0.2s ease"
                     }}
-                    title="Download audio call with deleted lines trimmed out"
+                    title={hasBeenTrimmed ? "Download audio call with deleted lines trimmed out" : "Download call audio file"}
                   >
-                    ✂️ Download Trimmed Audio
-                  </a>
-                )}
-                {hasRealAudio ? (
-                  <a 
-                    className={styles.downloadButton} 
-                    href={audioSrc}
-                    download={hasBeenTrimmed ? `trimmed_call_${activeCallId}.wav` : "call-audio.mp3"}
-                    aria-label="Download audio"
-                    title={hasBeenTrimmed ? "Download trimmed audio call" : "Download original audio call"}
-                  >
-                    <DownloadIcon />
-                  </a>
-                ) : (
-                  <button 
-                    className={styles.downloadButton} 
-                    style={{ opacity: 0.5, cursor: "not-allowed" }}
-                    title="No audio file source available to download"
-                    disabled
-                  >
-                    <DownloadIcon />
+                    {hasBeenTrimmed ? "✂️ Download Trimmed Audio" : "🎵 Download Audio"}
                   </button>
                 )}
               </div>
