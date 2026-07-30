@@ -1275,32 +1275,34 @@ export default function Home() {
             {/* Dedicated Active Processing & Stop Call Control Bar */}
             {pipelineStep > 0 && pipelineStep < 5 && (
               <div style={{
-                marginTop: "16px",
-                background: "linear-gradient(135deg, #18181b 0%, #09090b 100%)",
-                border: "1.5px solid #ef4444",
-                borderRadius: "14px",
-                padding: "16px 20px",
+                marginTop: "12px",
+                background: "#ffffff",
+                border: "1px solid #fee2e2",
+                borderRadius: "10px",
+                padding: "10px 14px",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "space-between",
-                gap: "16px",
-                boxShadow: "0 10px 25px rgba(239, 68, 68, 0.25)"
+                gap: "12px",
+                boxShadow: "0 2px 8px rgba(239, 68, 68, 0.08)"
               }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
                   <div style={{
-                    width: "14px",
-                    height: "14px",
+                    width: "8px",
+                    height: "8px",
                     borderRadius: "50%",
                     background: "#ef4444",
-                    boxShadow: "0 0 12px #ef4444"
+                    flexShrink: 0
                   }} />
-                  <div>
-                    <div style={{ fontSize: "14px", fontWeight: 700, color: "#ffffff" }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: "13px", fontWeight: 600, color: "#111827", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                       {getDropzoneText()}
                     </div>
-                    <div style={{ fontSize: "12px", color: "#a1a1aa", marginTop: "2px" }}>
-                      {uploadedFile ? uploadedFile.name : "Processing audio file..."}
-                    </div>
+                    {uploadedFile && (
+                      <div style={{ fontSize: "11px", color: "#6b7280", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {uploadedFile.name}
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -1308,28 +1310,28 @@ export default function Home() {
                   type="button"
                   onClick={handleCancelTranscription}
                   style={{
-                    background: "linear-gradient(135deg, #ef4444 0%, #dc2626 100%)",
+                    background: "#ef4444",
                     color: "#ffffff",
                     border: "none",
-                    borderRadius: "10px",
-                    padding: "10px 20px",
-                    fontSize: "13px",
-                    fontWeight: 700,
+                    borderRadius: "6px",
+                    padding: "5px 11px",
+                    fontSize: "12px",
+                    fontWeight: 600,
                     cursor: "pointer",
                     display: "inline-flex",
                     alignItems: "center",
-                    gap: "8px",
-                    boxShadow: "0 4px 14px rgba(239, 68, 68, 0.4)",
-                    transition: "all 0.2s ease"
+                    gap: "5px",
+                    whiteSpace: "nowrap",
+                    flexShrink: 0,
+                    boxShadow: "0 1px 3px rgba(239, 68, 68, 0.25)"
                   }}
                   title="Stop / Cancel Call Processing Immediately"
                 >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="12" cy="12" r="10" />
-                    <line x1="15" y1="9" x2="9" y2="15" />
-                    <line x1="9" y1="9" x2="15" y2="15" />
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
                   </svg>
-                  <span>🛑 STOP / CANCEL CALL</span>
+                  <span>Stop Call</span>
                 </button>
               </div>
             )}
