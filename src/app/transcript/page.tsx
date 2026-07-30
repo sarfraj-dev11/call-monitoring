@@ -558,16 +558,22 @@ export default function TranscriptPage() {
     if (!lineToDelete) return;
 
     const tStart = timeStringToSeconds(lineToDelete.time);
-    let tEnd = tStart + 4.0;
 
+    // Exact word-by-word speech duration (~0.28s per word, min 0.5s)
+    const wordCount = (lineToDelete.text || "").trim().split(/\s+/).filter(Boolean).length;
+    const wordDuration = Math.max(0.5, Math.min(6.0, wordCount * 0.28));
+
+    let maxGap = 5.0;
     if (index < transcriptData.length - 1) {
       const nextTime = timeStringToSeconds(transcriptData[index + 1].time);
       if (nextTime > tStart) {
-        tEnd = nextTime;
+        maxGap = nextTime - tStart;
       }
     }
 
-    const cutDuration = tEnd - tStart;
+    // Cut ONLY the exact word-by-word speech duration!
+    const cutDuration = Math.min(wordDuration, maxGap);
+    const tEnd = tStart + cutDuration;
 
     // Track deleted time range for instant playback skipping
     deletedTimeRangesRef.current.push({ start: tStart, end: tEnd });
