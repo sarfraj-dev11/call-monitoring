@@ -484,16 +484,22 @@ export default function TranscriptPage() {
     if (!lineToDelete) return;
 
     const tStart = timeStringToSeconds(lineToDelete.time);
-    let tEnd = tStart + 4;
+    
+    // Calculate exact sentence duration based on word count (~0.32s per word, min 1s)
+    const wordCount = (lineToDelete.text || "").trim().split(/\s+/).filter(Boolean).length;
+    const wordDuration = Math.max(1.0, Math.min(10.0, wordCount * 0.32));
+
+    let maxGap = 5.0;
     if (index < transcriptData.length - 1) {
       const nextTime = timeStringToSeconds(transcriptData[index + 1].time);
       if (nextTime > tStart) {
-        tEnd = nextTime;
+        maxGap = nextTime - tStart;
       }
     }
-    if (tEnd <= tStart) tEnd = tStart + 3;
 
-    const cutDuration = tEnd - tStart;
+    // Cut ONLY the exact sentence duration so neighboring words in the next line remain 100% untouched!
+    const cutDuration = Math.min(wordDuration, maxGap);
+    const tEnd = tStart + cutDuration;
 
     // Track deleted time range for instant playback skipping
     deletedTimeRangesRef.current.push({ start: tStart, end: tEnd });
