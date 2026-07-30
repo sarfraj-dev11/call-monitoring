@@ -338,6 +338,7 @@ export default function Home() {
         // Direct Gemini Resumable File Upload (Bypasses Vercel 4.5MB Payload limit completely for 3-hour calls)
         let data = null;
         let response = null;
+        const transcribeStartMs = Date.now();
         try {
           console.log(`Initiating direct Gemini File upload for ${file.name} (${(file.size / (1024 * 1024)).toFixed(2)} MB)...`);
           const initRes = await fetch(`/api/transcribe?action=init-upload&fileName=${encodeURIComponent(file.name)}&fileSize=${file.size}&fileMimeType=${encodeURIComponent(file.type || "audio/mp3")}`);
