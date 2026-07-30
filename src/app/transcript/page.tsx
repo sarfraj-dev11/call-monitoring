@@ -555,11 +555,22 @@ export default function TranscriptPage() {
             setAudioSrc(trimmedBlobUrl);
             setHasBeenTrimmed(true);
             setDurationSec(Math.round(trimmedBuffer.duration));
+
+            // ⚡ FORCE HTML5 <audio> element to load the trimmed audio immediately!
+            if (audioRef.current) {
+              const wasPlaying = isPlaying || !audioRef.current.paused;
+              audioRef.current.src = trimmedBlobUrl;
+              audioRef.current.load();
+              audioRef.current.currentTime = Math.max(0, Math.min(trimmedBuffer.duration, tStart));
+              if (wasPlaying) {
+                audioRef.current.play().catch(() => {});
+              }
+            }
           }
         } catch (audioErr) {
           console.warn("Background audio trimming handled asynchronously:", audioErr);
         }
-      }, 20);
+      }, 10);
     }
   };
 
