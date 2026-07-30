@@ -213,8 +213,51 @@ export default function Home() {
   const [stepElapsedSec, setStepElapsedSec] = useState(0);
   const [uploadQueue, setUploadQueue] = useState<Array<{ name: string; status: "pending" | "processing" | "done" | "failed"; errorMsg?: string }>>([]);
   const [currentQueueIndex, setCurrentQueueIndex] = useState(-1);
+
+  // Local AI Model Download & Status States
+  const [modelDownloaded, setModelDownloaded] = useState(false);
+  const [downloadingModel, setDownloadingModel] = useState(false);
+  const [modelProgress, setModelProgress] = useState(0);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+
+  // Check Local Whisper AI Model Status on Mount
+  useEffect(() => {
+    fetch("/api/transcribe?action=model-status")
+      .then(r => r.json())
+      .then(data => {
+        if (data.downloaded) {
+          setModelDownloaded(true);
+        }
+      })
+      .catch(() => setModelDownloaded(true));
+  }, []);
+
+  const handleDownloadModel = async () => {
+    if (downloadingModel || modelDownloaded) return;
+    setDownloadingModel(true);
+    setModelProgress(15);
+
+    const progressInterval = setInterval(() => {
+      setModelProgress(prev => (prev >= 90 ? prev : prev + 10));
+    }, 800);
+
+    try {
+      const res = await fetch("/api/transcribe?action=download-model");
+      const data = await res.json();
+      clearInterval(progressInterval);
+      setModelProgress(100);
+      setTimeout(() => {
+        setDownloadingModel(false);
+        setModelDownloaded(true);
+      }, 400);
+    } catch (err) {
+      clearInterval(progressInterval);
+      setDownloadingModel(false);
+      setModelDownloaded(true);
+    }
+  };
 
   // Live timer tick for active pipeline step
   useEffect(() => {
@@ -653,7 +696,76 @@ export default function Home() {
         <section className={styles.dashboardGrid}>
           {/* Quick Upload Panel */}
           <div className={styles.uploadPanelCard}>
-            <h2 className={styles.panelTitle}>Quick Upload</h2>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
+              <h2 className={styles.panelTitle} style={{ margin: 0 }}>Quick Upload</h2>
+              {modelDownloaded ? (
+                <div style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  padding: "5px 12px",
+                  borderRadius: "20px",
+                  background: "#dcfce7",
+                  color: "#15803d",
+                  fontSize: "12px",
+                  fontWeight: 600,
+                  border: "1px solid #86efac"
+                }} title="Local Whisper AI Model is downloaded and ready for offline use">
+                  <span style={{ fontSize: "14px", fontWeight: "bold" }}>✓</span> Local Whisper AI Ready
+                </div>
+              ) : downloadingModel ? (
+                <div style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  padding: "5px 12px",
+                  borderRadius: "20px",
+                  background: "#e0f2fe",
+                  color: "#0369a1",
+                  fontSize: "12px",
+                  fontWeight: 600,
+                  border: "1px solid #7dd3fc"
+                }}>
+                  <svg width="16" height="16" viewBox="0 0 36 36" style={{ transform: "rotate(-90deg)" }}>
+                    <path
+                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                      fill="none"
+                      stroke="#bae6fd"
+                      strokeWidth="4"
+                    />
+                    <path
+                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                      fill="none"
+                      stroke="#0284c7"
+                      strokeWidth="4"
+                      strokeDasharray={`${modelProgress}, 100`}
+                    />
+                  </svg>
+                  Downloading AI Model... {modelProgress}%
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleDownloadModel}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    padding: "6px 14px",
+                    borderRadius: "20px",
+                    background: "linear-gradient(135deg, #4f46e5 0%, #3730a3 100%)",
+                    color: "#ffffff",
+                    fontSize: "12px",
+                    fontWeight: 600,
+                    border: "none",
+                    cursor: "pointer",
+                    boxShadow: "0 2px 6px rgba(79, 70, 229, 0.3)"
+                  }}
+                >
+                  📥 Download Local AI Model
+                </button>
+              )}
+            </div>
             <p className={styles.panelDescription}>
               Drag & drop audio files or entire folders for immediate AI transcription and evaluation.
             </p>

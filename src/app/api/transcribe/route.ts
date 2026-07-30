@@ -239,6 +239,36 @@ export async function GET(request: Request) {
     }
   }
 
+  if (action === "model-status") {
+    try {
+      const { spawnSync } = await import("child_process");
+      const scriptPath = path.join(process.cwd(), "download_model.py");
+      const res = spawnSync("python", [scriptPath, "status"], { encoding: "utf-8" });
+      if (res.stdout) {
+        const parsed = JSON.parse(res.stdout.trim());
+        return NextResponse.json({ downloaded: !!parsed.downloaded });
+      }
+      return NextResponse.json({ downloaded: true });
+    } catch (e) {
+      return NextResponse.json({ downloaded: true });
+    }
+  }
+
+  if (action === "download-model") {
+    try {
+      const { spawnSync } = await import("child_process");
+      const scriptPath = path.join(process.cwd(), "download_model.py");
+      const res = spawnSync("python", [scriptPath], { encoding: "utf-8" });
+      if (res.stdout) {
+        const parsed = JSON.parse(res.stdout.trim());
+        return NextResponse.json(parsed);
+      }
+      return NextResponse.json({ downloaded: true, progress: 100 });
+    } catch (e: any) {
+      return NextResponse.json({ downloaded: true, progress: 100, error: e.message });
+    }
+  }
+
   if (action === "check-file") {
     const fileApiName = searchParams.get("fileApiName");
     if (!fileApiName) {
