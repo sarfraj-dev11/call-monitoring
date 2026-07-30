@@ -234,7 +234,7 @@ export default function Home() {
       case 1:
         return `Uploading audio... (${uploadProgress}%)`;
       case 2:
-        return `⚡ Transcribing audio with Gemini... (${stepElapsedSec.toFixed(1)}s)`;
+        return `⚡ Transcribing audio with Local Whisper AI... (${stepElapsedSec.toFixed(1)}s)`;
       case 3:
         return `⚡ AI Evaluating QA scorecard... (${stepElapsedSec.toFixed(1)}s)`;
       case 4:

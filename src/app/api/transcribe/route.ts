@@ -469,6 +469,48 @@ Return ONLY a single valid JSON object with this EXACT structure:
       await fs.writeFile(filePath, buffer);
 
       audioUrl = `/api/audio?file=${fileName}`;
+
+      // Local Open-Source Whisper AI Transcriber (100% FREE & UNLIMITED)
+      try {
+        const { spawnSync } = await import("child_process");
+        const scriptPath = path.join(process.cwd(), "transcribe_whisper.py");
+        const pyResult = spawnSync("python", [scriptPath, filePath], { encoding: "utf-8" });
+
+        if (pyResult.stdout) {
+          const parsedWhisper = JSON.parse(pyResult.stdout.trim());
+          if (parsedWhisper && parsedWhisper.transcript && parsedWhisper.transcript.length > 0) {
+            console.log(`Local Whisper AI successfully transcribed ${file.name} (${parsedWhisper.transcript.length} turns)!`);
+            const transcribeTimeMs = Date.now() - routeStartTime;
+            const transcribeTimeSec = Math.round(transcribeTimeMs / 100) / 10;
+            const today = new Date();
+            const formattedToday = today.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+            const formattedIso = today.toISOString().split("T")[0];
+            const calculatedDurationSec = serverParsedDurationSec || durationSec || 105;
+            const mins = Math.floor(calculatedDurationSec / 60);
+            const secs = Math.round(calculatedDurationSec % 60);
+            const formattedDuration = mins > 0 ? (secs > 0 ? `${mins} min ${secs} sec` : `${mins} min`) : `${secs} sec`;
+
+            return NextResponse.json({
+              agentName: parsedWhisper.agentName || "Rahul M.",
+              date: formattedToday,
+              dateStr: formattedIso,
+              duration: formattedDuration,
+              durationSec: calculatedDurationSec,
+              language: parsedWhisper.language || "English",
+              transcript: parsedWhisper.transcript,
+              transcribeTimeMs,
+              transcribeTimeSec,
+              transcribeTokens: 0,
+              tokensUsed: 0,
+              evaluation: null,
+              qaAnalysis: null,
+              audioUrl
+            });
+          }
+        }
+      } catch (whisperErr) {
+        console.warn("Local Whisper AI execution skipped or failed, using API fallback...", whisperErr);
+      }
     } catch (fsErr: any) { }
 
     const systemPromptTranscribe = `You are a high-fidelity verbatim audio transcriber for call center QA evaluations.
