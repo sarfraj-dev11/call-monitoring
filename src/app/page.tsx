@@ -518,19 +518,8 @@ export default function Home() {
           console.error("Failed to get audio duration:", durErr);
         }
 
-        // Fast Browser Compression: If audio > 3.5MB, downsample to 16kHz Mono WAV in browser
-        // This guarantees request payload is < 4MB, completely preventing HTTP 413 Payload Too Large error on Vercel
-        let fileToSend: Blob = file;
-        if (file.size > 3.5 * 1024 * 1024) {
-          console.log(`File size (${(file.size / (1024 * 1024)).toFixed(1)}MB) exceeds 3.5MB limit. Downsampling to 16kHz Mono WAV...`);
-          setUploadQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: "processing", errorMsg: "⚡ Compressing audio for fast upload..." } : q));
-          fileToSend = await compressAudioToMono16k(file);
-          console.log(`Compressed audio size: ${(fileToSend.size / (1024 * 1024)).toFixed(1)}MB`);
-        }
-
         const formData = new FormData();
-        const safeName = file.name.replace(/\.[^/.]+$/, "") + ".wav";
-        formData.append("file", fileToSend, safeName);
+        formData.append("file", file);
         if (durationSec > 0) {
           formData.append("durationSec", durationSec.toString());
         }
@@ -539,126 +528,56 @@ export default function Home() {
 
         const transcribeStartMs = Date.now();
         let data: any = null;
+        let response: any = null;
+        let attempts = 0;
+        const maxAttempts = 5;
 
-        // Smart Chunking for Files > 3.5MB to eliminate Vercel HTTP 413 Payload Too Large
-        if (file.size > 3.5 * 1024 * 1024) {
-          console.log(`File size (${(file.size / (1024 * 1024)).toFixed(1)}MB) exceeds 3.5MB limit. Splitting into 2-minute clean segments...`);
-          setUploadQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: "processing", errorMsg: "⚡ Segmenting audio to bypass cloud payload limits..." } : q));
+        while (attempts < maxAttempts) {
+          try {
+            response = await fetch("/api/transcribe", {
+              method: "POST",
+              body: formData,
+            });
 
-          const segments = await splitAudioIntoSegments(file, 120);
-          console.log(`Audio split into ${segments.length} segment(s)`);
-
-          const formatTime = (totalSec: number) => {
-            const h = Math.floor(totalSec / 3600);
-            const m = Math.floor((totalSec % 3600) / 60);
-            const s = Math.floor(totalSec % 60);
-            return `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
-          };
-
-          let combinedTranscript: any[] = [];
-          let baseData: any = null;
-
-          for (let segIdx = 0; segIdx < segments.length; segIdx++) {
-            const seg = segments[segIdx];
-            setUploadQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: "processing", errorMsg: `⚡ Transcribing segment ${segIdx + 1}/${segments.length}...` } : q));
-
-            const segForm = new FormData();
-            segForm.append("file", seg.blob, `segment_${segIdx}.wav`);
-            if (seg.durationSec > 0) {
-              segForm.append("durationSec", seg.durationSec.toString());
-            }
-
-            try {
-              const segRes = await fetch("/api/transcribe", {
-                method: "POST",
-                body: segForm,
-              });
-
-              if (segRes.ok) {
-                const segJson = await segRes.json();
-                if (!baseData) baseData = segJson;
-
-                if (segJson.transcript && Array.isArray(segJson.transcript)) {
-                  const shiftedTurns = segJson.transcript.map((turn: any) => {
-                    const tSec = parseTimeToSec(turn.time);
-                    return {
-                      ...turn,
-                      time: formatTime(seg.startSec + tSec)
-                    };
-                  });
-                  combinedTranscript.push(...shiftedTurns);
-                }
+            if (!response.ok) {
+              if (response.status === 413) {
+                data = { error: "File exceeds Vercel 4.5MB cloud upload limit. Local Whisper AI or Firebase direct upload recommended for huge files." };
               } else {
-                console.warn(`Segment ${segIdx + 1} transcription returned HTTP ${segRes.status}`);
-              }
-            } catch (segErr) {
-              console.error(`Segment ${segIdx + 1} fetch error:`, segErr);
-            }
-          }
-
-          if (baseData && combinedTranscript.length > 0) {
-            data = {
-              ...baseData,
-              transcript: combinedTranscript,
-              durationSec: durationSec || baseData.durationSec
-            };
-          } else {
-            data = { error: "Failed to transcribe audio segments." };
-          }
-        } else {
-          // Fast single request for files <= 3.5MB
-          const formData = new FormData();
-          formData.append("file", file);
-          if (durationSec > 0) {
-            formData.append("durationSec", durationSec.toString());
-          }
-
-          let attempts = 0;
-          const maxAttempts = 5;
-
-          while (attempts < maxAttempts) {
-            try {
-              const response = await fetch("/api/transcribe", {
-                method: "POST",
-                body: formData,
-              });
-
-              if (!response.ok) {
                 const errText = await response.text();
                 data = { error: errText || `Server error (HTTP ${response.status})` };
-              } else {
-                data = await response.json();
               }
+            } else {
+              data = await response.json();
+            }
 
-              if (data.error && (
-                data.error.toLowerCase().includes("rate limit") ||
-                data.error.toLowerCase().includes("limit reached") ||
-                data.error.toLowerCase().includes("quota") ||
-                data.error.toLowerCase().includes("429") ||
-                data.error.toLowerCase().includes("503") ||
-                data.error.toLowerCase().includes("500") ||
-                data.error.toLowerCase().includes("service unavailable") ||
-                data.error.toLowerCase().includes("high demand") ||
-                data.error.toLowerCase().includes("temporary") ||
-                data.error.toLowerCase().includes("unavailable")
-              )) {
-                attempts++;
-                if (attempts < maxAttempts) {
-                  let waitMs = 5000 * attempts;
-                  await new Promise((resolve) => setTimeout(resolve, waitMs));
-                  continue;
-                }
-              }
-              break;
-            } catch (e: any) {
+            if (data.error && (
+              data.error.toLowerCase().includes("rate limit") ||
+              data.error.toLowerCase().includes("limit reached") ||
+              data.error.toLowerCase().includes("quota") ||
+              data.error.toLowerCase().includes("429") ||
+              data.error.toLowerCase().includes("503") ||
+              data.error.toLowerCase().includes("500") ||
+              data.error.toLowerCase().includes("service unavailable") ||
+              data.error.toLowerCase().includes("high demand") ||
+              data.error.toLowerCase().includes("temporary") ||
+              data.error.toLowerCase().includes("unavailable")
+            )) {
               attempts++;
               if (attempts < maxAttempts) {
-                await new Promise((resolve) => setTimeout(resolve, 3000));
+                let waitMs = 5000 * attempts;
+                await new Promise((resolve) => setTimeout(resolve, waitMs));
                 continue;
               }
-              data = { error: e.message || "Network request failed" };
-              break;
             }
+            break;
+          } catch (e: any) {
+            attempts++;
+            if (attempts < maxAttempts) {
+              await new Promise((resolve) => setTimeout(resolve, 3000));
+              continue;
+            }
+            data = { error: e.message || "Network request failed" };
+            break;
           }
         }
 
