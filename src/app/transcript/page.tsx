@@ -146,25 +146,36 @@ export default function TranscriptPage() {
   const progressBarRef = useRef<HTMLDivElement>(null);
   const activeRowRef = useRef<HTMLDivElement>(null);
 
-  // Undo / Redo History Stack State
-  const [historyStack, setHistoryStack] = useState<Array<{ transcript: any[]; audioSrc: string }>>([]);
-  const [historyIndex, setHistoryIndex] = useState<number>(-1);
+  // Bulletproof Undo / Redo History Management using Refs + React State
+  const historyStackRef = useRef<Array<{ transcript: any[]; audioSrc: string }>>([]);
+  const historyIndexRef = useRef<number>(-1);
+
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+
+  const updateUndoRedoState = () => {
+    setCanUndo(historyIndexRef.current > 0);
+    setCanRedo(historyIndexRef.current < historyStackRef.current.length - 1);
+  };
 
   const pushToHistory = (newTranscript: any[], newAudioSrc?: string) => {
     const src = newAudioSrc || audioSrc;
-    setHistoryStack((prev) => {
-      const sliced = prev.slice(0, historyIndex + 1);
-      const updated = [...sliced, { transcript: newTranscript, audioSrc: src }];
-      setHistoryIndex(updated.length - 1);
-      return updated;
-    });
+    const currentStack = historyStackRef.current;
+    const currentIndex = historyIndexRef.current;
+
+    const sliced = currentIndex >= 0 ? currentStack.slice(0, currentIndex + 1) : [];
+    const updated = [...sliced, { transcript: JSON.parse(JSON.stringify(newTranscript)), audioSrc: src }];
+
+    historyStackRef.current = updated;
+    historyIndexRef.current = updated.length - 1;
+    updateUndoRedoState();
   };
 
   const handleUndo = () => {
-    if (historyIndex > 0) {
-      const prevIdx = historyIndex - 1;
-      const state = historyStack[prevIdx];
-      setHistoryIndex(prevIdx);
+    if (historyIndexRef.current > 0) {
+      historyIndexRef.current = historyIndexRef.current - 1;
+      const state = historyStackRef.current[historyIndexRef.current];
+
       setTranscriptData(state.transcript);
       if (state.audioSrc && state.audioSrc !== audioSrc) {
         setAudioSrc(state.audioSrc);
@@ -174,14 +185,15 @@ export default function TranscriptPage() {
         }
       }
       persistTranscriptToDatabase(state.transcript, state.audioSrc);
+      updateUndoRedoState();
     }
   };
 
   const handleRedo = () => {
-    if (historyIndex < historyStack.length - 1) {
-      const nextIdx = historyIndex + 1;
-      const state = historyStack[nextIdx];
-      setHistoryIndex(nextIdx);
+    if (historyIndexRef.current < historyStackRef.current.length - 1) {
+      historyIndexRef.current = historyIndexRef.current + 1;
+      const state = historyStackRef.current[historyIndexRef.current];
+
       setTranscriptData(state.transcript);
       if (state.audioSrc && state.audioSrc !== audioSrc) {
         setAudioSrc(state.audioSrc);
@@ -191,6 +203,7 @@ export default function TranscriptPage() {
         }
       }
       persistTranscriptToDatabase(state.transcript, state.audioSrc);
+      updateUndoRedoState();
     }
   };
 
@@ -259,8 +272,9 @@ export default function TranscriptPage() {
           }
 
           // Initialize history stack with loaded call state
-          setHistoryStack([{ transcript: initialTranscript, audioSrc: audioFileUrl || "" }]);
-          setHistoryIndex(0);
+          historyStackRef.current = [{ transcript: JSON.parse(JSON.stringify(initialTranscript)), audioSrc: audioFileUrl || "" }];
+          historyIndexRef.current = 0;
+          updateUndoRedoState();
         } else {
           setHasData(false);
         }
@@ -868,24 +882,24 @@ export default function TranscriptPage() {
                     <button
                       type="button"
                       onClick={handleUndo}
-                      disabled={historyIndex <= 0}
+                      disabled={!canUndo}
                       style={{
                         display: "inline-flex",
                         alignItems: "center",
                         gap: "4px",
                         padding: "4px 10px",
                         borderRadius: "6px",
-                        background: historyIndex > 0 ? "#ffffff" : "#f4f4f5",
-                        color: historyIndex > 0 ? "#18181b" : "#a1a1aa",
+                        background: canUndo ? "#ffffff" : "#f4f4f5",
+                        color: canUndo ? "#18181b" : "#a1a1aa",
                         border: "1px solid #e4e4e7",
                         fontSize: "12px",
                         fontWeight: 600,
-                        cursor: historyIndex > 0 ? "pointer" : "not-allowed",
-                        opacity: historyIndex > 0 ? 1 : 0.5,
-                        boxShadow: historyIndex > 0 ? "0 1px 2px rgba(0,0,0,0.05)" : "none",
+                        cursor: canUndo ? "pointer" : "not-allowed",
+                        opacity: canUndo ? 1 : 0.5,
+                        boxShadow: canUndo ? "0 1px 2px rgba(0,0,0,0.05)" : "none",
                         transition: "all 0.2s ease"
                       }}
-                      title={historyIndex > 0 ? "Undo last transcript edit/deletion" : "Nothing to undo"}
+                      title={canUndo ? "Undo last transcript edit/deletion" : "Nothing to undo"}
                     >
                       ↩️ Undo
                     </button>
@@ -893,24 +907,24 @@ export default function TranscriptPage() {
                     <button
                       type="button"
                       onClick={handleRedo}
-                      disabled={historyIndex >= historyStack.length - 1}
+                      disabled={!canRedo}
                       style={{
                         display: "inline-flex",
                         alignItems: "center",
                         gap: "4px",
                         padding: "4px 10px",
                         borderRadius: "6px",
-                        background: historyIndex < historyStack.length - 1 ? "#ffffff" : "#f4f4f5",
-                        color: historyIndex < historyStack.length - 1 ? "#18181b" : "#a1a1aa",
+                        background: canRedo ? "#ffffff" : "#f4f4f5",
+                        color: canRedo ? "#18181b" : "#a1a1aa",
                         border: "1px solid #e4e4e7",
                         fontSize: "12px",
                         fontWeight: 600,
-                        cursor: historyIndex < historyStack.length - 1 ? "pointer" : "not-allowed",
-                        opacity: historyIndex < historyStack.length - 1 ? 1 : 0.5,
-                        boxShadow: historyIndex < historyStack.length - 1 ? "0 1px 2px rgba(0,0,0,0.05)" : "none",
+                        cursor: canRedo ? "pointer" : "not-allowed",
+                        opacity: canRedo ? 1 : 0.5,
+                        boxShadow: canRedo ? "0 1px 2px rgba(0,0,0,0.05)" : "none",
                         transition: "all 0.2s ease"
                       }}
-                      title={historyIndex < historyStack.length - 1 ? "Redo undone edit" : "Nothing to redo"}
+                      title={canRedo ? "Redo undone edit" : "Nothing to redo"}
                     >
                       ↪️ Redo
                     </button>
