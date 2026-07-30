@@ -146,6 +146,77 @@ export default function TranscriptPage() {
   const progressBarRef = useRef<HTMLDivElement>(null);
   const activeRowRef = useRef<HTMLDivElement>(null);
 
+  // Undo / Redo History Stack State
+  const [historyStack, setHistoryStack] = useState<Array<{ transcript: any[]; audioSrc: string }>>([]);
+  const [historyIndex, setHistoryIndex] = useState<number>(-1);
+
+  const pushToHistory = (newTranscript: any[], newAudioSrc?: string) => {
+    const src = newAudioSrc || audioSrc;
+    setHistoryStack((prev) => {
+      const sliced = prev.slice(0, historyIndex + 1);
+      const updated = [...sliced, { transcript: newTranscript, audioSrc: src }];
+      setHistoryIndex(updated.length - 1);
+      return updated;
+    });
+  };
+
+  const handleUndo = () => {
+    if (historyIndex > 0) {
+      const prevIdx = historyIndex - 1;
+      const state = historyStack[prevIdx];
+      setHistoryIndex(prevIdx);
+      setTranscriptData(state.transcript);
+      if (state.audioSrc && state.audioSrc !== audioSrc) {
+        setAudioSrc(state.audioSrc);
+        if (audioRef.current) {
+          audioRef.current.src = state.audioSrc;
+          audioRef.current.load();
+        }
+      }
+      persistTranscriptToDatabase(state.transcript, state.audioSrc);
+    }
+  };
+
+  const handleRedo = () => {
+    if (historyIndex < historyStack.length - 1) {
+      const nextIdx = historyIndex + 1;
+      const state = historyStack[nextIdx];
+      setHistoryIndex(nextIdx);
+      setTranscriptData(state.transcript);
+      if (state.audioSrc && state.audioSrc !== audioSrc) {
+        setAudioSrc(state.audioSrc);
+        if (audioRef.current) {
+          audioRef.current.src = state.audioSrc;
+          audioRef.current.load();
+        }
+      }
+      persistTranscriptToDatabase(state.transcript, state.audioSrc);
+    }
+  };
+
+  const persistTranscriptToDatabase = (transcriptToSave: any[], audioUrlToSave?: string) => {
+    const storedDb = localStorage.getItem("all_calls_database");
+    if (storedDb && activeCallId) {
+      try {
+        const db = JSON.parse(storedDb);
+        const updatedDb = db.map((c: any) => {
+          if (c.id === activeCallId) {
+            return {
+              ...c,
+              transcript: transcriptToSave,
+              ...(audioUrlToSave ? { audioUrl: audioUrlToSave } : {})
+            };
+          }
+          return c;
+        });
+        localStorage.setItem("all_calls_database", JSON.stringify(updatedDb));
+        setAllCalls(updatedDb);
+      } catch (e) {
+        console.error("Failed to persist transcript changes to database", e);
+      }
+    }
+  };
+
   const loadCallData = (selectedId?: string) => {
     const storedDb = localStorage.getItem("all_calls_database");
     if (storedDb) {
@@ -160,7 +231,8 @@ export default function TranscriptPage() {
         
         if (activeCall) {
           setHasData(true);
-          setTranscriptData(activeCall.transcript || []);
+          const initialTranscript = activeCall.transcript || [];
+          setTranscriptData(initialTranscript);
           setMetadata([
             { label: "Call ID", value: activeCall.id, highlight: true },
             { label: "Agent", value: activeCall.agent || "AI Agent" },
@@ -185,6 +257,10 @@ export default function TranscriptPage() {
             setAudioSrc("");
             setHasRealAudio(false);
           }
+
+          // Initialize history stack with loaded call state
+          setHistoryStack([{ transcript: initialTranscript, audioSrc: audioFileUrl || "" }]);
+          setHistoryIndex(0);
         } else {
           setHasData(false);
         }
@@ -328,26 +404,8 @@ export default function TranscriptPage() {
       text: editingText
     };
     setTranscriptData(updatedTranscript);
-
-    // Save to database
-    const storedDb = localStorage.getItem("all_calls_database");
-    if (storedDb && activeCallId) {
-      try {
-        const db = JSON.parse(storedDb);
-        const updatedDb = db.map((c: any) => {
-          if (c.id === activeCallId) {
-            return {
-              ...c,
-              transcript: updatedTranscript
-            };
-          }
-          return c;
-        });
-        localStorage.setItem("all_calls_database", JSON.stringify(updatedDb));
-      } catch (e) {
-        console.error("Failed to save edited transcript", e);
-      }
-    }
+    pushToHistory(updatedTranscript);
+    persistTranscriptToDatabase(updatedTranscript);
 
     setEditingIndex(null);
     setEditingText("");
@@ -440,27 +498,8 @@ export default function TranscriptPage() {
             console.warn("Storage quota limit safely caught");
           }
 
-          // Save trimmed transcript to database
-          const storedDb = localStorage.getItem("all_calls_database");
-          if (storedDb && activeCallId) {
-            try {
-              const db = JSON.parse(storedDb);
-              const updatedDb = db.map((c: any) => {
-                if (c.id === activeCallId) {
-                  return {
-                    ...c,
-                    transcript: updatedTranscript,
-                    audioUrl: trimmedBlobUrl,
-                    durationSec: Math.round(trimmedBuffer.duration)
-                  };
-                }
-                return c;
-              });
-              localStorage.setItem("all_calls_database", JSON.stringify(updatedDb));
-            } catch (e) {
-              console.warn("Database storage quota safely handled");
-            }
-          }
+          pushToHistory(updatedTranscript, trimmedBlobUrl);
+          persistTranscriptToDatabase(updatedTranscript, trimmedBlobUrl);
           return;
         }
       } catch (audioErr) {
@@ -468,25 +507,8 @@ export default function TranscriptPage() {
       }
     }
 
-    // Fallback save if audio is not present
-    const storedDb = localStorage.getItem("all_calls_database");
-    if (storedDb && activeCallId) {
-      try {
-        const db = JSON.parse(storedDb);
-        const updatedDb = db.map((c: any) => {
-          if (c.id === activeCallId) {
-            return {
-              ...c,
-              transcript: updatedTranscript
-            };
-          }
-          return c;
-        });
-        localStorage.setItem("all_calls_database", JSON.stringify(updatedDb));
-      } catch (e) {
-        console.error("Failed to save deleted transcript", e);
-      }
-    }
+    pushToHistory(updatedTranscript);
+    persistTranscriptToDatabase(updatedTranscript);
   };
 
   useEffect(() => {
@@ -837,8 +859,64 @@ export default function TranscriptPage() {
 
             {/* Full Transcript Area */}
             <section className={styles.transcriptCard}>
-              <div className={styles.transcriptHeader}>
-                <h2>Full Transcript</h2>
+              <div className={styles.transcriptHeader} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "10px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
+                  <h2 style={{ margin: 0 }}>Full Transcript</h2>
+                  
+                  {/* Undo & Redo Controls */}
+                  <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                    <button
+                      type="button"
+                      onClick={handleUndo}
+                      disabled={historyIndex <= 0}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "4px",
+                        padding: "4px 10px",
+                        borderRadius: "6px",
+                        background: historyIndex > 0 ? "#ffffff" : "#f4f4f5",
+                        color: historyIndex > 0 ? "#18181b" : "#a1a1aa",
+                        border: "1px solid #e4e4e7",
+                        fontSize: "12px",
+                        fontWeight: 600,
+                        cursor: historyIndex > 0 ? "pointer" : "not-allowed",
+                        opacity: historyIndex > 0 ? 1 : 0.5,
+                        boxShadow: historyIndex > 0 ? "0 1px 2px rgba(0,0,0,0.05)" : "none",
+                        transition: "all 0.2s ease"
+                      }}
+                      title={historyIndex > 0 ? "Undo last transcript edit/deletion" : "Nothing to undo"}
+                    >
+                      ↩️ Undo
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleRedo}
+                      disabled={historyIndex >= historyStack.length - 1}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "4px",
+                        padding: "4px 10px",
+                        borderRadius: "6px",
+                        background: historyIndex < historyStack.length - 1 ? "#ffffff" : "#f4f4f5",
+                        color: historyIndex < historyStack.length - 1 ? "#18181b" : "#a1a1aa",
+                        border: "1px solid #e4e4e7",
+                        fontSize: "12px",
+                        fontWeight: 600,
+                        cursor: historyIndex < historyStack.length - 1 ? "pointer" : "not-allowed",
+                        opacity: historyIndex < historyStack.length - 1 ? 1 : 0.5,
+                        boxShadow: historyIndex < historyStack.length - 1 ? "0 1px 2px rgba(0,0,0,0.05)" : "none",
+                        transition: "all 0.2s ease"
+                      }}
+                      title={historyIndex < historyStack.length - 1 ? "Redo undone edit" : "Nothing to redo"}
+                    >
+                      ↪️ Redo
+                    </button>
+                  </div>
+                </div>
+
                 <div className={styles.legend}>
                   <div className={styles.legendItem}>
                     <span className={`${styles.legendDot} ${styles.legendDotAgent}`} />
