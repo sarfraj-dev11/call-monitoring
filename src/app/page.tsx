@@ -227,11 +227,9 @@ export default function Home() {
     fetch("/api/transcribe?action=model-status")
       .then(r => r.json())
       .then(data => {
-        if (data.downloaded) {
-          setModelDownloaded(true);
-        }
+        setModelDownloaded(!!data.downloaded);
       })
-      .catch(() => setModelDownloaded(true));
+      .catch(() => setModelDownloaded(false));
   }, []);
 
   const handleDownloadModel = async () => {
