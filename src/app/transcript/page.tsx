@@ -227,13 +227,15 @@ export default function TranscriptPage() {
 
   const persistTranscriptToDatabase = async (transcriptToSave: any[], audioUrlToSave?: string) => {
     if (!activeCallId) return;
+    const isBlob = audioUrlToSave?.startsWith("blob:");
+    const validUrl = isBlob ? undefined : audioUrlToSave;
 
     try {
       const callRef = doc(db, "calls", activeCallId);
       await updateDoc(callRef, {
         transcript: transcriptToSave,
         deletedRanges: deletedTimeRangesRef.current || [],
-        ...(audioUrlToSave ? { audioUrl: audioUrlToSave } : {})
+        ...(validUrl ? { audioUrl: validUrl } : {})
       });
     } catch (e) {
       console.warn("Firestore transcript update notice:", e);
@@ -250,7 +252,7 @@ export default function TranscriptPage() {
               ...c,
               transcript: transcriptToSave,
               deletedRanges: deletedTimeRangesRef.current || [],
-              ...(audioUrlToSave ? { audioUrl: audioUrlToSave } : {})
+              ...(validUrl ? { audioUrl: validUrl } : {})
             };
           }
           return c;
@@ -280,13 +282,55 @@ export default function TranscriptPage() {
   const handleDownloadAudio = async () => {
     if (!audioSrc) return;
     try {
-      const res = await fetch(audioSrc);
+      const proxyUrl = audioSrc.startsWith("http") && !audioSrc.includes("/api/audio")
+        ? `/api/audio?url=${encodeURIComponent(audioSrc)}`
+        : audioSrc;
+
+      if (deletedTimeRangesRef.current.length > 0) {
+        const res = await fetch(proxyUrl);
+        const arrayBuffer = await res.arrayBuffer();
+        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        const audioCtx = new AudioContextClass();
+        let trimmedBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+
+        for (const range of deletedTimeRangesRef.current) {
+          const sampleRate = trimmedBuffer.sampleRate;
+          const channels = trimmedBuffer.numberOfChannels;
+          const totalSamples = trimmedBuffer.length;
+          const startSample = Math.max(0, Math.floor(range.start * sampleRate));
+          const endSample = Math.min(totalSamples, Math.ceil(range.end * sampleRate));
+          const cutLength = endSample - startSample;
+
+          if (totalSamples - cutLength > 0) {
+            const newBuffer = audioCtx.createBuffer(channels, totalSamples - cutLength, sampleRate);
+            for (let ch = 0; ch < channels; ch++) {
+              const oldData = trimmedBuffer.getChannelData(ch);
+              const newData = newBuffer.getChannelData(ch);
+              if (startSample > 0) newData.set(oldData.subarray(0, startSample), 0);
+              if (endSample < totalSamples) newData.set(oldData.subarray(endSample, totalSamples), startSample);
+            }
+            trimmedBuffer = newBuffer;
+          }
+        }
+
+        const wavBlob = audioBufferToWavBlob(trimmedBuffer);
+        const url = URL.createObjectURL(wavBlob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `trimmed_call_${activeCallId || "audio"}.wav`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        return;
+      }
+
+      const res = await fetch(proxyUrl);
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      const extension = hasBeenTrimmed ? "wav" : (audioSrc.includes(".mp3") ? "mp3" : "wav");
-      link.download = `trimmed_call_${activeCallId || "audio"}.${extension}`;
+      link.download = `call_${activeCallId || "audio"}.mp3`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
