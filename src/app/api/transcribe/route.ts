@@ -248,9 +248,9 @@ export async function GET(request: Request) {
         const parsed = JSON.parse(res.stdout.trim());
         return NextResponse.json({ downloaded: !!parsed.downloaded });
       }
-      return NextResponse.json({ downloaded: true });
+      return NextResponse.json({ downloaded: false });
     } catch (e) {
-      return NextResponse.json({ downloaded: true });
+      return NextResponse.json({ downloaded: false });
     }
   }
 
