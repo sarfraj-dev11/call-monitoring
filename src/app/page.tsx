@@ -604,30 +604,53 @@ export default function Home() {
           console.error("Failed to get audio duration:", durErr);
         }
 
-        // Step 1: Direct Upload to Firebase Storage (Bypasses Vercel 4.5MB Payload limit!)
+        // Step 1: Direct Upload to Firebase Storage with Automatic CORS Proxy Fallback
         setPipelineStep(1); // Uploading
-        const cleanFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-        const storagePath = `calls/${Date.now()}_${cleanFileName}`;
-        const storageRef = ref(storage, storagePath);
-        const uploadTask = uploadBytesResumable(storageRef, file);
+        let uploadedAudioUrl = "";
 
-        const uploadedAudioUrl = await new Promise<string>((resolve, reject) => {
-          uploadTask.on(
-            "state_changed",
-            (snapshot) => {
-              const progress = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
-              setUploadProgress(progress);
-            },
-            (error) => {
-              console.error("Firebase Storage upload error:", error);
-              reject(error);
-            },
-            async () => {
-              const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
-              resolve(downloadUrl);
-            }
-          );
-        });
+        try {
+          const cleanFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+          const storagePath = `calls/${Date.now()}_${cleanFileName}`;
+          const storageRef = ref(storage, storagePath);
+          const uploadTask = uploadBytesResumable(storageRef, file);
+
+          uploadedAudioUrl = await new Promise<string>((resolve, reject) => {
+            uploadTask.on(
+              "state_changed",
+              (snapshot) => {
+                const progress = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
+                setUploadProgress(progress);
+              },
+              (error) => {
+                console.warn("Client Firebase Storage upload notice (CORS/Network):", error);
+                reject(error);
+              },
+              async () => {
+                const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
+                resolve(downloadUrl);
+              }
+            );
+          });
+        } catch (corsErr) {
+          console.log("Client upload encountered CORS/Network restriction. Falling back to server-side Firebase upload proxy...");
+          const uploadFormData = new FormData();
+          uploadFormData.append("file", file);
+
+          const proxyRes = await fetch("/api/upload-audio", {
+            method: "POST",
+            body: uploadFormData
+          });
+
+          if (!proxyRes.ok) {
+            const errText = await proxyRes.text();
+            throw new Error(`Upload failed: ${errText}`);
+          }
+
+          const proxyData = await proxyRes.json();
+          if (proxyData.error) throw new Error(proxyData.error);
+          uploadedAudioUrl = proxyData.audioUrl;
+          setUploadProgress(100);
+        }
 
         sessionStorage.setItem("active_audio_blob_url", uploadedAudioUrl);
 
