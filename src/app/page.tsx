@@ -329,6 +329,9 @@ export default function Home() {
     return true;
   });
 
+  const [isAiPaused, setIsAiPaused] = useState<boolean>(false);
+  const [evaluatingCallId, setEvaluatingCallId] = useState<string | null>(null);
+
   useEffect(() => {
     if (typeof window !== "undefined") {
       const stored = localStorage.getItem("all_calls_database");
@@ -339,8 +342,76 @@ export default function Home() {
           console.error("Failed to load calls database", e);
         }
       }
+      const savedAiPause = localStorage.getItem("is_ai_paused");
+      if (savedAiPause !== null) {
+        setIsAiPaused(savedAiPause === "true");
+      }
     }
   }, []);
+
+  const toggleAiPause = () => {
+    const nextState = !isAiPaused;
+    setIsAiPaused(nextState);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("is_ai_paused", String(nextState));
+    }
+  };
+
+  const runSingleCallEvaluation = async (callId: string) => {
+    const callToEval = recentCalls.find((c) => c.id === callId);
+    if (!callToEval || !callToEval.transcript) return;
+
+    setEvaluatingCallId(callId);
+    const evalStartMs = Date.now();
+
+    try {
+      const evalRes = await fetch("/api/evaluate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transcript: callToEval.transcript,
+          agentName: callToEval.agent || "Rahul M.",
+        }),
+      });
+
+      if (evalRes.ok) {
+        const evalData = await evalRes.json();
+        if (evalData && (evalData.evaluation || evalData.qaAnalysis)) {
+          const evaluateTimeSec = evalData.evaluateTimeSec || Math.round((Date.now() - evalStartMs) / 100) / 10;
+          const evaluateTokens = evalData.evaluateTokens || Math.round((callToEval.durationSec || 105) * 8 + 650);
+
+          const updatedCall: Call = {
+            ...callToEval,
+            score: evalData.evaluation?.qaScore || (evalData.qaAnalysis?.checklist ? 90 : 85),
+            status: "Reviewed",
+            sentiment: evalData.sentiment || "Positive",
+            category: evalData.category || "Sales",
+            agentTime: evalData.agentTime || 55,
+            customerTime: evalData.customerTime || 40,
+            silenceTime: evalData.silenceTime || 5,
+            evaluation: evalData.evaluation || null,
+            qaAnalysis: evalData.qaAnalysis || null,
+            evaluateTimeSec,
+            totalProcessingTimeSec: Math.round(((callToEval.transcribeTimeSec || 2) + evaluateTimeSec) * 10) / 10,
+            evaluateTokens,
+            tokensUsed: (callToEval.transcribeTokens || 1000) + evaluateTokens,
+          };
+
+          const stored = localStorage.getItem("all_calls_database");
+          if (stored) {
+            const db = JSON.parse(stored);
+            const updatedDb = db.map((c: any) => (c.id === callId ? updatedCall : c));
+            localStorage.setItem("all_calls_database", JSON.stringify(updatedDb));
+            setRecentCalls(updatedDb);
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Single call evaluation failed:", err);
+    } finally {
+      setEvaluatingCallId(null);
+    }
+  };
 
   const handleCallClick = (id: string) => {
     localStorage.setItem("active_call_id", id);
@@ -640,52 +711,54 @@ export default function Home() {
         localStorage.setItem("last_call_analysis", JSON.stringify(data));
         setRecentCalls(updatedDb);
 
-        // Step 3: Auto AI Evaluation (Optional enhancement)
-        setPipelineStep(3);
-        const evalStartMs = Date.now();
-        let evalData: any = null;
+        // Step 3: Auto AI Evaluation (Skipped if AI is paused)
+        if (!isAiPaused) {
+          setPipelineStep(3);
+          const evalStartMs = Date.now();
+          let evalData: any = null;
 
-        try {
-          const evalRes = await fetch("/api/evaluate", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              transcript: data.transcript,
-              agentName: data.agentName || "Rahul M."
-            })
-          });
+          try {
+            const evalRes = await fetch("/api/evaluate", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                transcript: data.transcript,
+                agentName: data.agentName || "Rahul M."
+              })
+            });
 
-          if (evalRes.ok) {
-            evalData = await evalRes.json();
-            if (evalData && (evalData.evaluation || evalData.qaAnalysis)) {
-              const evaluateTimeSec = evalData.evaluateTimeSec || Math.round((Date.now() - evalStartMs) / 100) / 10;
-              const evaluateTokens = evalData.evaluateTokens || Math.round((data.durationSec || 105) * 8 + 650);
+            if (evalRes.ok) {
+              evalData = await evalRes.json();
+              if (evalData && (evalData.evaluation || evalData.qaAnalysis)) {
+                const evaluateTimeSec = evalData.evaluateTimeSec || Math.round((Date.now() - evalStartMs) / 100) / 10;
+                const evaluateTokens = evalData.evaluateTokens || Math.round((data.durationSec || 105) * 8 + 650);
 
-              newCall = {
-                ...newCall,
-                score: evalData.evaluation?.qaScore || (evalData.qaAnalysis?.checklist ? 90 : 85),
-                status: "Reviewed",
-                sentiment: evalData.sentiment || "Positive",
-                category: evalData.category || "Sales",
-                agentTime: evalData.agentTime || 55,
-                customerTime: evalData.customerTime || 40,
-                silenceTime: evalData.silenceTime || 5,
-                evaluation: evalData.evaluation || null,
-                qaAnalysis: evalData.qaAnalysis || null,
-                evaluateTimeSec,
-                totalProcessingTimeSec: Math.round((transcribeTimeSec + evaluateTimeSec) * 10) / 10,
-                evaluateTokens,
-                tokensUsed: transcribeTokens + evaluateTokens
-              };
+                newCall = {
+                  ...newCall,
+                  score: evalData.evaluation?.qaScore || (evalData.qaAnalysis?.checklist ? 90 : 85),
+                  status: "Reviewed",
+                  sentiment: evalData.sentiment || "Positive",
+                  category: evalData.category || "Sales",
+                  agentTime: evalData.agentTime || 55,
+                  customerTime: evalData.customerTime || 40,
+                  silenceTime: evalData.silenceTime || 5,
+                  evaluation: evalData.evaluation || null,
+                  qaAnalysis: evalData.qaAnalysis || null,
+                  evaluateTimeSec,
+                  totalProcessingTimeSec: Math.round((transcribeTimeSec + evaluateTimeSec) * 10) / 10,
+                  evaluateTokens,
+                  tokensUsed: transcribeTokens + evaluateTokens
+                };
 
-              // Update database with completed AI evaluation
-              updatedDb = updatedDb.map(c => c.id === newCall.id ? newCall : c);
-              localStorage.setItem("all_calls_database", JSON.stringify(updatedDb));
-              setRecentCalls(updatedDb);
+                // Update database with completed AI evaluation
+                updatedDb = updatedDb.map(c => c.id === newCall.id ? newCall : c);
+                localStorage.setItem("all_calls_database", JSON.stringify(updatedDb));
+                setRecentCalls(updatedDb);
+              }
             }
+          } catch (evalErr) {
+            console.warn("Auto evaluation encountered network issue, transcript remains saved!", evalErr);
           }
-        } catch (evalErr) {
-          console.warn("Auto evaluation encountered network issue, transcript remains saved!", evalErr);
         }
 
         setPipelineStep(4); // Finalizing
@@ -694,7 +767,9 @@ export default function Home() {
         setUploadQueue(prev => prev.map((q, idx) => idx === i ? {
           ...q,
           status: "done",
-          errorMsg: `⚡ ${transcribeTimeSec}s trans. | ${newCall.evaluateTimeSec || 0}s eval.`
+          errorMsg: isAiPaused
+            ? `⚡ ${transcribeTimeSec}s (Transcribed Only)`
+            : `⚡ ${transcribeTimeSec}s trans. | ${newCall.evaluateTimeSec || 0}s eval.`
         } : q));
       } catch (err: any) {
         clearInterval(uploadInterval);
@@ -858,75 +933,108 @@ export default function Home() {
         <section className={styles.dashboardGrid}>
           {/* Quick Upload Panel */}
           <div className={styles.uploadPanelCard}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px", flexWrap: "wrap", gap: "8px" }}>
               <h2 className={styles.panelTitle} style={{ margin: 0 }}>Quick Upload</h2>
-              {modelDownloaded ? (
-                <div style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "6px",
-                  padding: "5px 12px",
-                  borderRadius: "20px",
-                  background: "#dcfce7",
-                  color: "#15803d",
-                  fontSize: "12px",
-                  fontWeight: 600,
-                  border: "1px solid #86efac"
-                }} title="Local Whisper AI Model is downloaded and ready for offline use">
-                  <span style={{ fontSize: "14px", fontWeight: "bold" }}>✓</span> Local Whisper AI Ready
-                </div>
-              ) : downloadingModel ? (
-                <div style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "8px",
-                  padding: "5px 12px",
-                  borderRadius: "20px",
-                  background: "#e0f2fe",
-                  color: "#0369a1",
-                  fontSize: "12px",
-                  fontWeight: 600,
-                  border: "1px solid #7dd3fc"
-                }}>
-                  <svg width="16" height="16" viewBox="0 0 36 36" style={{ transform: "rotate(-90deg)" }}>
-                    <path
-                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                      fill="none"
-                      stroke="#bae6fd"
-                      strokeWidth="4"
-                    />
-                    <path
-                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                      fill="none"
-                      stroke="#0284c7"
-                      strokeWidth="4"
-                      strokeDasharray={`${modelProgress}, 100`}
-                    />
-                  </svg>
-                  Downloading AI Model... {modelProgress}%
-                </div>
-              ) : (
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                {/* Pause AI Evaluation Toggle Button */}
                 <button
                   type="button"
-                  onClick={handleDownloadModel}
+                  onClick={toggleAiPause}
                   style={{
                     display: "inline-flex",
                     alignItems: "center",
                     gap: "6px",
-                    padding: "6px 14px",
+                    padding: "5px 12px",
                     borderRadius: "20px",
-                    background: "linear-gradient(135deg, #4f46e5 0%, #3730a3 100%)",
-                    color: "#ffffff",
+                    cursor: "pointer",
+                    fontWeight: 600,
+                    fontSize: "12px",
+                    transition: "all 0.2s ease",
+                    background: isAiPaused ? "#fef3c7" : "#f4f4f5",
+                    color: isAiPaused ? "#b45309" : "#3f3f46",
+                    border: isAiPaused ? "1px solid #fde68a" : "1px solid #e4e4e7",
+                    boxShadow: isAiPaused ? "0 2px 5px rgba(245, 158, 11, 0.2)" : "none"
+                  }}
+                  title={isAiPaused ? "AI Evaluation is PAUSED. Uploads will ONLY transcribe audio." : "Click to Pause AI Evaluation (Transcribe Only mode)"}
+                >
+                  <span style={{
+                    display: "inline-block",
+                    width: "8px",
+                    height: "8px",
+                    borderRadius: "50%",
+                    background: isAiPaused ? "#f59e0b" : "#22c55e"
+                  }} />
+                  {isAiPaused ? "⏸️ Pause AI (Transcribe Only)" : "🤖 AI Evaluation Active"}
+                </button>
+
+                {modelDownloaded ? (
+                  <div style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    padding: "5px 12px",
+                    borderRadius: "20px",
+                    background: "#dcfce7",
+                    color: "#15803d",
                     fontSize: "12px",
                     fontWeight: 600,
-                    border: "none",
-                    cursor: "pointer",
-                    boxShadow: "0 2px 6px rgba(79, 70, 229, 0.3)"
-                  }}
-                >
-                  📥 Download Local AI Model
-                </button>
-              )}
+                    border: "1px solid #86efac"
+                  }} title="Local Whisper AI Model is downloaded and ready for offline use">
+                    <span style={{ fontSize: "14px", fontWeight: "bold" }}>✓</span> Local Whisper AI Ready
+                  </div>
+                ) : downloadingModel ? (
+                  <div style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    padding: "5px 12px",
+                    borderRadius: "20px",
+                    background: "#e0f2fe",
+                    color: "#0369a1",
+                    fontSize: "12px",
+                    fontWeight: 600,
+                    border: "1px solid #7dd3fc"
+                  }}>
+                    <svg width="16" height="16" viewBox="0 0 36 36" style={{ transform: "rotate(-90deg)" }}>
+                      <path
+                        d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                        fill="none"
+                        stroke="#bae6fd"
+                        strokeWidth="4"
+                      />
+                      <path
+                        d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                        fill="none"
+                        stroke="#0284c7"
+                        strokeWidth="4"
+                        strokeDasharray={`${modelProgress}, 100`}
+                      />
+                    </svg>
+                    Downloading AI Model... {modelProgress}%
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleDownloadModel}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      padding: "6px 14px",
+                      borderRadius: "20px",
+                      background: "linear-gradient(135deg, #4f46e5 0%, #3730a3 100%)",
+                      color: "#ffffff",
+                      fontSize: "12px",
+                      fontWeight: 600,
+                      border: "none",
+                      cursor: "pointer",
+                      boxShadow: "0 2px 6px rgba(79, 70, 229, 0.3)"
+                    }}
+                  >
+                    📥 Download Local AI Model
+                  </button>
+                )}
+              </div>
             </div>
             <p className={styles.panelDescription}>
               Drag & drop audio files or entire folders for immediate AI transcription and evaluation.
@@ -1220,10 +1328,39 @@ export default function Home() {
                             </span>
                           </td>
                           <td>
-                            <span className={`${styles.statusBadge} ${styles[`status${call.status}`]}`}>
-                              <span className={styles.statusDot} />
-                              {call.status}
-                            </span>
+                            {call.status === "Pending" ? (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  runSingleCallEvaluation(call.id);
+                                }}
+                                disabled={evaluatingCallId === call.id}
+                                style={{
+                                  background: "#2563eb",
+                                  color: "#ffffff",
+                                  border: "none",
+                                  padding: "4px 10px",
+                                  borderRadius: "6px",
+                                  fontSize: "11px",
+                                  fontWeight: 600,
+                                  cursor: "pointer",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "4px",
+                                  boxShadow: "0 1px 3px rgba(37, 99, 235, 0.3)",
+                                  opacity: evaluatingCallId === call.id ? 0.7 : 1
+                                }}
+                                title="Click to run AI Quality Evaluation for this call"
+                              >
+                                {evaluatingCallId === call.id ? "⏳ Evaluating..." : "▶️ Run AI Eval"}
+                              </button>
+                            ) : (
+                              <span className={`${styles.statusBadge} ${styles[`status${call.status}`]}`}>
+                                <span className={styles.statusDot} />
+                                {call.status}
+                              </span>
+                            )}
                           </td>
                         </tr>
                       );
