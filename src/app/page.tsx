@@ -1214,15 +1214,14 @@ export default function Home() {
               style={{ opacity: 0, position: "absolute", width: "1px", height: "1px", zIndex: -1, pointerEvents: "none" }}
             />
 
-            {/* Clickable & Draggable Dropzone using Native Label */}
-            <label
-              htmlFor={pipelineStep === 0 ? "audio-file-input" : undefined}
+            {/* Clickable & Draggable Dropzone */}
+            <div
               className={`${styles.dropZone} ${isDragging ? styles.dropZoneDragging : ""} ${pipelineStep > 0 ? styles.dropZoneProcessing : ""}`}
               onDragOver={handleDragOver}
               onDragEnter={handleDragOver}
               onDragLeave={handleDragLeave}
               onDrop={handleDrop}
-              onClick={() => {
+              onClick={(e) => {
                 if (pipelineStep === 0) {
                   document.getElementById("audio-file-input")?.click();
                 }
@@ -1304,7 +1303,7 @@ export default function Home() {
                   </div>
                 )}
               </div>
-            </label>
+            </div>
 
             {uploadQueue.length > 0 && (
               <div className={styles.queueContainer}>
