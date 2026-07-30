@@ -793,6 +793,10 @@ export default function Home() {
             }
             break;
           } catch (e: any) {
+            if (isCancelledRef.current || e.name === "AbortError" || e.message?.toLowerCase().includes("aborted")) {
+              console.log("Transcription aborted by user. Exiting retry loop immediately.");
+              break;
+            }
             attempts++;
             if (attempts < maxAttempts) {
               await new Promise((resolve) => setTimeout(resolve, 3000));
@@ -801,6 +805,11 @@ export default function Home() {
             data = { error: e.message || "Network request failed" };
             break;
           }
+        }
+
+        if (isCancelledRef.current) {
+          console.log("Call processing cancelled by user. Stopping pipeline.");
+          break;
         }
 
         setUploadProgress(100);
