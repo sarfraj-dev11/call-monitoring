@@ -38,6 +38,14 @@ const TrashIcon = () => (
   </svg>
 );
 
+const parseTimeToSec = (tStr: string): number => {
+  if (!tStr) return 0;
+  const parts = tStr.split(":").map((p) => parseFloat(p) || 0);
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  return parts[0] || 0;
+};
+
 // Helper to get precise audio duration using HTML5 Audio metadata loading
 const getAudioDuration = (file: File): Promise<number> => {
   return new Promise((resolve) => {
@@ -204,6 +212,80 @@ const compressAudioToMono16k = async (file: File): Promise<Blob> => {
   } catch (err) {
     console.warn("Browser audio compression failed, returning original file:", err);
     return file;
+  }
+};
+
+// Splits large audio files into 2-minute mono WAV segments (~3.8 MB each) using Web Audio API
+// Completely eliminates HTTP 413 Payload Too Large errors on Vercel Cloud Serverless Functions
+const splitAudioIntoSegments = async (file: File, segmentDurationSec = 120): Promise<{ blob: Blob; startSec: number; durationSec: number }[]> => {
+  try {
+    const AudioContextClass = (window.AudioContext || (window as any).webkitAudioContext);
+    if (!AudioContextClass) return [{ blob: file, startSec: 0, durationSec: 0 }];
+
+    const audioCtx = new AudioContextClass();
+    const arrayBuffer = await file.arrayBuffer();
+    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+
+    const totalDuration = audioBuffer.duration;
+    const targetSampleRate = 16000;
+    const segments: { blob: Blob; startSec: number; durationSec: number }[] = [];
+
+    const totalSegments = Math.ceil(totalDuration / segmentDurationSec);
+
+    for (let segIdx = 0; segIdx < totalSegments; segIdx++) {
+      const startSec = segIdx * segmentDurationSec;
+      const endSec = Math.min(startSec + segmentDurationSec, totalDuration);
+      const segLengthSec = endSec - startSec;
+
+      if (segLengthSec <= 0) continue;
+
+      const offlineCtx = new OfflineAudioContext(1, Math.ceil(segLengthSec * targetSampleRate), targetSampleRate);
+      const source = offlineCtx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(offlineCtx.destination);
+      source.start(0, startSec, segLengthSec);
+
+      const renderedBuffer = await offlineCtx.startRendering();
+      const channelData = renderedBuffer.getChannelData(0);
+
+      const bufferLength = channelData.length;
+      const wavBuffer = new ArrayBuffer(44 + bufferLength * 2);
+      const view = new DataView(wavBuffer);
+
+      const writeString = (v: DataView, offset: number, string: string) => {
+        for (let i = 0; i < string.length; i++) {
+          v.setUint8(offset + i, string.charCodeAt(i));
+        }
+      };
+
+      writeString(view, 0, 'RIFF');
+      view.setUint32(4, 36 + bufferLength * 2, true);
+      writeString(view, 8, 'WAVE');
+      writeString(view, 12, 'fmt ');
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, 1, true);
+      view.setUint32(24, targetSampleRate, true);
+      view.setUint32(28, targetSampleRate * 2, true);
+      view.setUint16(32, 2, true);
+      view.setUint16(34, 16, true);
+      writeString(view, 36, 'data');
+      view.setUint32(40, bufferLength * 2, true);
+
+      let offset = 44;
+      for (let i = 0; i < bufferLength; i++, offset += 2) {
+        let s = Math.max(-1, Math.min(1, channelData[i]));
+        view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+      }
+
+      const segBlob = new Blob([view], { type: 'audio/wav' });
+      segments.push({ blob: segBlob, startSec, durationSec: segLengthSec });
+    }
+
+    return segments;
+  } catch (err) {
+    console.warn("Failed to split audio into segments:", err);
+    return [{ blob: file, startSec: 0, durationSec: 0 }];
   }
 };
 
@@ -457,35 +539,93 @@ export default function Home() {
 
         const transcribeStartMs = Date.now();
         let data: any = null;
-        let response: any = null;
-        let attempts = 0;
-        const maxAttempts = 5;
+
+        // Smart Chunking for Files > 3.5MB to eliminate Vercel HTTP 413 Payload Too Large
+        if (file.size > 3.5 * 1024 * 1024) {
+          console.log(`File size (${(file.size / (1024 * 1024)).toFixed(1)}MB) exceeds 3.5MB limit. Splitting into 2-minute clean segments...`);
+          setUploadQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: "processing", errorMsg: "⚡ Segmenting audio to bypass cloud payload limits..." } : q));
+
+          const segments = await splitAudioIntoSegments(file, 120);
+          console.log(`Audio split into ${segments.length} segment(s)`);
+
+          const formatTime = (totalSec: number) => {
+            const h = Math.floor(totalSec / 3600);
+            const m = Math.floor((totalSec % 3600) / 60);
+            const s = Math.floor(totalSec % 60);
+            return `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+          };
+
+          let combinedTranscript: any[] = [];
+          let baseData: any = null;
+
+          for (let segIdx = 0; segIdx < segments.length; segIdx++) {
+            const seg = segments[segIdx];
+            setUploadQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: "processing", errorMsg: `⚡ Transcribing segment ${segIdx + 1}/${segments.length}...` } : q));
+
+            const segForm = new FormData();
+            segForm.append("file", seg.blob, `segment_${segIdx}.wav`);
+            if (seg.durationSec > 0) {
+              segForm.append("durationSec", seg.durationSec.toString());
+            }
+
+            try {
+              const segRes = await fetch("/api/transcribe", {
+                method: "POST",
+                body: segForm,
+              });
+
+              if (segRes.ok) {
+                const segJson = await segRes.json();
+                if (!baseData) baseData = segJson;
+
+                if (segJson.transcript && Array.isArray(segJson.transcript)) {
+                  const shiftedTurns = segJson.transcript.map((turn: any) => {
+                    const tSec = parseTimeToSec(turn.time);
+                    return {
+                      ...turn,
+                      time: formatTime(seg.startSec + tSec)
+                    };
+                  });
+                  combinedTranscript.push(...shiftedTurns);
+                }
+              } else {
+                console.warn(`Segment ${segIdx + 1} transcription returned HTTP ${segRes.status}`);
+              }
+            } catch (segErr) {
+              console.error(`Segment ${segIdx + 1} fetch error:`, segErr);
+            }
+          }
+
+          if (baseData && combinedTranscript.length > 0) {
+            data = {
+              ...baseData,
+              transcript: combinedTranscript,
+              durationSec: durationSec || baseData.durationSec
+            };
+          } else {
+            data = { error: "Failed to transcribe audio segments." };
+          }
+        } else {
+          // Fast single request for files <= 3.5MB
+          const formData = new FormData();
+          formData.append("file", file);
+          if (durationSec > 0) {
+            formData.append("durationSec", durationSec.toString());
+          }
+
+          let attempts = 0;
+          const maxAttempts = 5;
 
           while (attempts < maxAttempts) {
             try {
-              response = await fetch("/api/transcribe", {
+              const response = await fetch("/api/transcribe", {
                 method: "POST",
                 body: formData,
               });
 
               if (!response.ok) {
-                if (response.status === 413) {
-                  console.warn("HTTP 413 Payload Too Large detected. Retrying with compressed 16kHz mono WAV...");
-                  setUploadQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: "processing", errorMsg: "⚡ Auto-Compressing large audio..." } : q));
-                  const compressed = await compressAudioToMono16k(file);
-                  const retryForm = new FormData();
-                  retryForm.append("file", compressed, "compressed_audio.wav");
-                  if (durationSec > 0) retryForm.append("durationSec", durationSec.toString());
-                  const retryRes = await fetch("/api/transcribe", { method: "POST", body: retryForm });
-                  if (retryRes.ok) {
-                    data = await retryRes.json();
-                  } else {
-                    data = { error: "Audio payload exceeds maximum cloud limit even after compression." };
-                  }
-                } else {
-                  const errText = await response.text();
-                  data = { error: errText || `Server error (HTTP ${response.status})` };
-                }
+                const errText = await response.text();
+                data = { error: errText || `Server error (HTTP ${response.status})` };
               } else {
                 data = await response.json();
               }
@@ -505,14 +645,6 @@ export default function Home() {
                 attempts++;
                 if (attempts < maxAttempts) {
                   let waitMs = 5000 * attempts;
-                  const match = data.error.match(/(?:try again in|retry in)\s*(\d+(\.\d+)?)/i);
-                  if (match && match[1]) {
-                    const waitSec = parseFloat(match[1]);
-                    waitMs = Math.ceil(waitSec * 1000) + 1000;
-                  }
-                  const waitSecRounded = Math.ceil(waitMs / 1000);
-                  const uiStatus = `Server busy (Retry ${attempts}/${maxAttempts} in ${waitSecRounded}s)`;
-                  setUploadQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: "processing", errorMsg: uiStatus } : q));
                   await new Promise((resolve) => setTimeout(resolve, waitMs));
                   continue;
                 }
@@ -521,7 +653,6 @@ export default function Home() {
             } catch (e: any) {
               attempts++;
               if (attempts < maxAttempts) {
-                setUploadQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: "processing", errorMsg: `Network retry (${attempts}/${maxAttempts})...` } : q));
                 await new Promise((resolve) => setTimeout(resolve, 3000));
                 continue;
               }
@@ -529,6 +660,7 @@ export default function Home() {
               break;
             }
           }
+        }
 
         clearInterval(uploadInterval);
         setUploadProgress(100);
