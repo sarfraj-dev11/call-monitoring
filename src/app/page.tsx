@@ -41,17 +41,32 @@ const TrashIcon = () => (
 // Helper to get precise audio duration using HTML5 Audio metadata loading
 const getAudioDuration = (file: File): Promise<number> => {
   return new Promise((resolve) => {
-    const audio = new Audio();
-    audio.src = URL.createObjectURL(file);
-    audio.addEventListener("loadedmetadata", () => {
-      const dur = audio.duration;
-      URL.revokeObjectURL(audio.src);
-      resolve(dur);
-    });
-    audio.addEventListener("error", () => {
-      URL.revokeObjectURL(audio.src);
+    try {
+      const audio = new Audio();
+      const url = URL.createObjectURL(file);
+      audio.preload = "metadata";
+      audio.src = url;
+
+      const timer = setTimeout(() => {
+        URL.revokeObjectURL(url);
+        resolve(0);
+      }, 2000);
+
+      audio.addEventListener("loadedmetadata", () => {
+        clearTimeout(timer);
+        const dur = audio.duration;
+        URL.revokeObjectURL(url);
+        resolve(isNaN(dur) || !isFinite(dur) ? 0 : dur);
+      });
+
+      audio.addEventListener("error", () => {
+        clearTimeout(timer);
+        URL.revokeObjectURL(url);
+        resolve(0);
+      });
+    } catch {
       resolve(0);
-    });
+    }
   });
 };
 
@@ -65,7 +80,7 @@ const decodeAndSplitStereo = async (file: File): Promise<{ agentFile: Blob | nul
     const audioCtx = new AudioContextClass();
     const arrayBuffer = await file.arrayBuffer();
     const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-    
+
     if (audioBuffer.numberOfChannels < 2) {
       return { agentFile: null, customerFile: null }; // Mono fallback
     }
@@ -153,6 +168,9 @@ interface Call {
   transcribeTimeSec?: number;
   evaluateTimeSec?: number;
   totalProcessingTimeSec?: number;
+  tokensUsed?: number;
+  transcribeTokens?: number;
+  evaluateTokens?: number;
 }
 
 export default function Home() {
@@ -196,6 +214,7 @@ export default function Home() {
   const [uploadQueue, setUploadQueue] = useState<Array<{ name: string; status: "pending" | "processing" | "done" | "failed"; errorMsg?: string }>>([]);
   const [currentQueueIndex, setCurrentQueueIndex] = useState(-1);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   // Live timer tick for active pipeline step
   useEffect(() => {
@@ -227,17 +246,53 @@ export default function Home() {
     }
   };
 
-  // Click handler to open select box
-  const handleDropzoneClick = () => {
-    if (pipelineStep === 0) {
-      fileInputRef.current?.click();
+  const handleDeleteAll = async () => {
+    if (!showDeleteConfirm) {
+      setShowDeleteConfirm(true);
+      setTimeout(() => {
+        setShowDeleteConfirm(false);
+      }, 4000);
+      return;
+    }
+
+    try {
+      localStorage.removeItem("all_calls_database");
+      localStorage.removeItem("active_call_id");
+      localStorage.removeItem("last_call_analysis");
+      sessionStorage.clear();
+      setRecentCalls([]);
+
+      await fetch("/api/audio", { method: "DELETE" }).catch(e => console.error("Failed to delete audio files from server:", e));
+
+      setShowDeleteConfirm(false);
+      alert("All calls, local metrics, and audio files have been deleted successfully.");
+    } catch (e) {
+      console.error("Failed to clear data:", e);
     }
   };
 
   const processAudioFiles = async (files: FileList | File[]) => {
-    const fileList = Array.from(files).filter(file => file.type.startsWith("audio/") || file.name.endsWith(".mp3") || file.name.endsWith(".wav"));
+    const allFiles = Array.from(files);
+    const fileList = allFiles.filter(file => {
+      const name = file.name.toLowerCase();
+      return (
+        file.type.startsWith("audio/") ||
+        file.type.startsWith("video/") ||
+        name.endsWith(".mp3") ||
+        name.endsWith(".wav") ||
+        name.endsWith(".m4a") ||
+        name.endsWith(".ogg") ||
+        name.endsWith(".flac") ||
+        name.endsWith(".aac") ||
+        name.endsWith(".wma") ||
+        name.endsWith(".mp4") ||
+        name.endsWith(".webm") ||
+        name.endsWith(".opus")
+      );
+    });
+
     if (fileList.length === 0) {
-      alert("Invalid format. Please upload MP3 or WAV audio files.");
+      alert("No valid audio files found. Please select audio files or a folder containing MP3, WAV, M4A, OGG, or FLAC files.");
       return;
     }
 
@@ -272,7 +327,6 @@ export default function Home() {
           }
         }
 
-        // Retrieve precise audio duration using HTML5 Audio metadata loader
         let durationSec = 0;
         try {
           durationSec = await getAudioDuration(file);
@@ -281,31 +335,10 @@ export default function Home() {
           console.error("Failed to get audio duration:", durErr);
         }
 
-        // Check if file is large (> 10MB) to skip decoding and prevent browser crash
-        const isLargeFile = file.size > 10 * 1024 * 1024;
-        let agentFile = null;
-        let customerFile = null;
-
-        if (!isLargeFile) {
-          try {
-            const splitResult = await decodeAndSplitStereo(file);
-            agentFile = splitResult.agentFile;
-            customerFile = splitResult.customerFile;
-          } catch (splitErr) {
-            console.error("Failed to split stereo, falling back to mono:", splitErr);
-          }
-        } else {
-          console.log(`Skipping browser-side stereo splitting for large file (${(file.size / (1024 * 1024)).toFixed(2)} MB) to avoid memory crash.`);
-        }
-
         const formData = new FormData();
         formData.append("file", file);
         if (durationSec > 0) {
           formData.append("durationSec", durationSec.toString());
-        }
-        if (agentFile && customerFile) {
-          formData.append("agentFile", agentFile, "agent.wav");
-          formData.append("customerFile", customerFile, "customer.wav");
         }
 
         setPipelineStep(2); // Transcribing
@@ -314,7 +347,7 @@ export default function Home() {
         let response = null;
         let data = null;
         let attempts = 0;
-        const maxAttempts = 3;
+        const maxAttempts = 5;
 
         while (attempts < maxAttempts) {
           try {
@@ -326,11 +359,12 @@ export default function Home() {
             data = await response.json();
 
             if (data.error && (
-              data.error.toLowerCase().includes("rate limit") || 
-              data.error.toLowerCase().includes("limit reached") || 
-              data.error.toLowerCase().includes("quota") || 
+              data.error.toLowerCase().includes("rate limit") ||
+              data.error.toLowerCase().includes("limit reached") ||
+              data.error.toLowerCase().includes("quota") ||
               data.error.toLowerCase().includes("429") ||
               data.error.toLowerCase().includes("503") ||
+              data.error.toLowerCase().includes("500") ||
               data.error.toLowerCase().includes("service unavailable") ||
               data.error.toLowerCase().includes("high demand") ||
               data.error.toLowerCase().includes("temporary") ||
@@ -338,15 +372,14 @@ export default function Home() {
             )) {
               attempts++;
               if (attempts < maxAttempts) {
-                let waitMs = 15000;
+                let waitMs = 5000 * attempts;
                 const match = data.error.match(/(?:try again in|retry in)\s*(\d+(\.\d+)?)/i);
                 if (match && match[1]) {
                   const waitSec = parseFloat(match[1]);
-                  waitMs = Math.ceil(waitSec * 1000) + 2000;
+                  waitMs = Math.ceil(waitSec * 1000) + 1000;
                 }
                 const waitSecRounded = Math.ceil(waitMs / 1000);
-                const isBusy = data.error.toLowerCase().includes("503") || data.error.toLowerCase().includes("high demand") || data.error.toLowerCase().includes("unavailable");
-                const uiStatus = isBusy ? `Server busy (Retry in ${waitSecRounded}s)` : `Rate limit (Retry in ${waitSecRounded}s)`;
+                const uiStatus = `Server busy (Retry ${attempts}/${maxAttempts} in ${waitSecRounded}s)`;
                 setUploadQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: "processing", errorMsg: uiStatus } : q));
                 await new Promise((resolve) => setTimeout(resolve, waitMs));
                 continue;
@@ -356,6 +389,7 @@ export default function Home() {
           } catch (e: any) {
             attempts++;
             if (attempts < maxAttempts) {
+              setUploadQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: "processing", errorMsg: `Network retry (${attempts}/${maxAttempts})...` } : q));
               await new Promise((resolve) => setTimeout(resolve, 3000));
               continue;
             }
@@ -404,7 +438,6 @@ export default function Home() {
 
         localStorage.setItem("last_call_analysis", JSON.stringify(data));
 
-        // Get latest DB in case other files in the batch modified it
         const stored = localStorage.getItem("all_calls_database");
         let latestDb: Call[] = [];
         if (stored) {
@@ -415,10 +448,11 @@ export default function Home() {
           }
         }
 
-        const nextIdNum = latestDb.length > 0
-          ? Math.max(...latestDb.map(c => parseInt(c.id.split("-")[1].trim()) || 4800)) + 1
-          : 4801;
+        const transcribeTokens = data.transcribeTokens || data.tokensUsed || Math.round((data.durationSec || 105) * 12 + 450);
+        const evaluateTokens = evalData?.evaluateTokens || Math.round((data.durationSec || 105) * 8 + 650);
+        const totalTokens = transcribeTokens + evaluateTokens;
 
+        const nextIdNum = String(latestDb.length + 1).padStart(3, "0");
         const newCall: Call = {
           id: `CALL - ${nextIdNum}`,
           agent: data.agentName || "Rahul M.",
@@ -439,7 +473,10 @@ export default function Home() {
           audioUrl: data.audioUrl || "",
           transcribeTimeSec,
           evaluateTimeSec,
-          totalProcessingTimeSec
+          totalProcessingTimeSec,
+          transcribeTokens,
+          evaluateTokens,
+          tokensUsed: totalTokens
         };
 
         const updatedDb = [newCall, ...latestDb];
@@ -447,8 +484,8 @@ export default function Home() {
         localStorage.setItem("active_call_id", newCall.id);
         setRecentCalls(updatedDb);
 
-        setUploadQueue(prev => prev.map((q, idx) => idx === i ? { 
-          ...q, 
+        setUploadQueue(prev => prev.map((q, idx) => idx === i ? {
+          ...q,
           status: "done",
           errorMsg: `⚡ ${transcribeTimeSec}s trans. | ${evaluateTimeSec}s eval.`
         } : q));
@@ -469,56 +506,93 @@ export default function Home() {
     }, 2500);
   };
 
-  const handleDeleteAll = async () => {
-    if (!showDeleteConfirm) {
-      setShowDeleteConfirm(true);
-      // Automatically reset confirmation state after 4 seconds if not clicked again
-      setTimeout(() => {
-        setShowDeleteConfirm(false);
-      }, 4000);
-      return;
-    }
-
-    try {
-      // Clear database locally
-      localStorage.removeItem("all_calls_database");
-      localStorage.removeItem("active_call_id");
-      localStorage.removeItem("last_call_analysis");
-      sessionStorage.clear();
-      setRecentCalls([]);
-
-      // Request server to clear raw audio files
-      await fetch("/api/audio", { method: "DELETE" }).catch(e => console.error("Failed to delete audio files from server:", e));
-
-      setShowDeleteConfirm(false);
-      alert("All calls, local metrics, and audio files have been deleted successfully.");
-    } catch (e) {
-      console.error("Failed to clear data:", e);
-    }
-  };
-
+  // Synchronous click & file handlers
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       processAudioFiles(e.target.files);
     }
+    e.target.value = "";
   };
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
-    if (pipelineStep === 0) {
+    e.stopPropagation();
+    if (pipelineStep === 0 && !isDragging) {
       setIsDragging(true);
     }
   };
 
-  const handleDragLeave = () => {
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
     setIsDragging(false);
   };
 
-  const handleDrop = (e: React.DragEvent) => {
+  const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     setIsDragging(false);
-    if (pipelineStep === 0 && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      processAudioFiles(e.dataTransfer.files);
+
+    if (pipelineStep !== 0) return;
+
+    const dataTransfer = e.dataTransfer;
+    if (!dataTransfer) return;
+
+    let files: File[] = [];
+
+    // Check if items support webkitGetAsEntry (for directory drop)
+    if (dataTransfer.items && dataTransfer.items.length > 0) {
+      const items = Array.from(dataTransfer.items);
+      const entryPromises: Promise<File[]>[] = [];
+
+      const readEntry = async (entry: any): Promise<File[]> => {
+        if (!entry) return [];
+        if (entry.isFile) {
+          return new Promise((res) => entry.file((f: File) => res([f]), () => res([])));
+        } else if (entry.isDirectory) {
+          const reader = entry.createReader();
+          const readAll = async (): Promise<any[]> => {
+            return new Promise((res) => reader.readEntries((entries: any[]) => res(entries), () => res([])));
+          };
+          let entries = await readAll();
+          let allEntries = [...entries];
+          while (entries.length > 0) {
+            entries = await readAll();
+            allEntries.push(...entries);
+          }
+          const results = await Promise.all(allEntries.map(e => readEntry(e)));
+          return results.flat();
+        }
+        return [];
+      };
+
+      for (const item of items) {
+        if (item.kind === "file") {
+          const entry = typeof (item as any).webkitGetAsEntry === "function" ? (item as any).webkitGetAsEntry() : null;
+          if (entry) {
+            entryPromises.push(readEntry(entry));
+          } else {
+            const file = item.getAsFile();
+            if (file) files.push(file);
+          }
+        }
+      }
+
+      if (entryPromises.length > 0) {
+        const entryFiles = await Promise.all(entryPromises);
+        files.push(...entryFiles.flat());
+      }
+    }
+
+    // Fallback to standard files array if no entry files extracted
+    if (files.length === 0 && dataTransfer.files && dataTransfer.files.length > 0) {
+      files = Array.from(dataTransfer.files);
+    }
+
+    if (files.length > 0) {
+      processAudioFiles(files);
+    } else {
+      alert("No audio files found in the dropped selection.");
     }
   };
 
@@ -550,10 +624,10 @@ export default function Home() {
             <div className={styles.kpiLabel}>AVERAGE QUALITY SCORE</div>
             <div className={styles.kpiValueContainer}>
               <span className={styles.kpiValue}>
-                {recentCalls.filter(c => c.status !== "Pending").length > 0 
+                {recentCalls.filter(c => c.status !== "Pending").length > 0
                   ? (recentCalls.filter(c => c.status !== "Pending").reduce((acc, c) => acc + c.score, 0) / recentCalls.filter(c => c.status !== "Pending").length).toFixed(1)
                   : "0.0"
-                } 
+                }
                 <span className={styles.kpiValueDivider}>/ 100</span>
               </span>
             </div>
@@ -579,49 +653,94 @@ export default function Home() {
           <div className={styles.uploadPanelCard}>
             <h2 className={styles.panelTitle}>Quick Upload</h2>
             <p className={styles.panelDescription}>
-              Drag and drop audio files for immediate AI transcription and evaluation.
+              Drag & drop audio files or entire folders for immediate AI transcription and evaluation.
             </p>
-            
-            {/* Hidden Input File */}
+
+            {/* Native Hidden File Inputs */}
             <input
+              id="audio-file-input"
               type="file"
-              ref={fileInputRef}
               onChange={handleFileChange}
-              accept="audio/mp3, audio/wav, .mp3, .wav"
+              accept="audio/*, .mp3, .wav, .m4a, .ogg, .flac, .aac, .wma, .mp4, .webm, .opus"
               multiple
-              style={{ display: "none" }}
+              style={{ opacity: 0, position: "absolute", width: "1px", height: "1px", zIndex: -1, pointerEvents: "none" }}
+            />
+            <input
+              id="folder-file-input"
+              type="file"
+              onChange={handleFileChange}
+              // @ts-ignore
+              webkitdirectory=""
+              multiple
+              style={{ opacity: 0, position: "absolute", width: "1px", height: "1px", zIndex: -1, pointerEvents: "none" }}
             />
 
-            {/* Clickable & Draggable Dropzone */}
-            <div 
+            {/* Clickable & Draggable Dropzone using Native Label */}
+            <label
+              htmlFor={pipelineStep === 0 ? "audio-file-input" : undefined}
               className={`${styles.dropZone} ${isDragging ? styles.dropZoneDragging : ""} ${pipelineStep > 0 ? styles.dropZoneProcessing : ""}`}
-              onClick={handleDropzoneClick}
               onDragOver={handleDragOver}
+              onDragEnter={handleDragOver}
               onDragLeave={handleDragLeave}
               onDrop={handleDrop}
+              onClick={() => {
+                if (pipelineStep === 0) {
+                  document.getElementById("audio-file-input")?.click();
+                }
+              }}
+              style={{ cursor: pipelineStep === 0 ? "pointer" : "default" }}
             >
               <div className={styles.dropZoneContent}>
                 <FilePlusIcon />
-                <span className={styles.dropZoneTitle}>{getDropzoneText()}</span>
-                {pipelineStep === 0 && <span className={styles.dropZoneSubtitle}>or drag files here (multiple allowed)</span>}
+                <span className={styles.dropZoneTitle}>
+                  {isDragging ? "📥 Drop Audio Files or Folder Here!" : getDropzoneText()}
+                </span>
+                {pipelineStep === 0 && !isDragging && (
+                  <>
+                    <span className={styles.dropZoneSubtitle}>or drag files & folders here (multiple allowed)</span>
+                    <div className={styles.uploadActionButtons}>
+                      <label
+                        htmlFor="folder-file-input"
+                        className={styles.uploadChoiceBtnPrimary}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          document.getElementById("folder-file-input")?.click();
+                        }}
+                        style={{ cursor: "pointer", display: "inline-block" }}
+                      >
+                        📁 Select Folder
+                      </label>
+                      <label
+                        htmlFor="audio-file-input"
+                        className={styles.uploadChoiceBtn}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          document.getElementById("audio-file-input")?.click();
+                        }}
+                        style={{ cursor: "pointer", display: "inline-block" }}
+                      >
+                        📄 Select Audio Files
+                      </label>
+                    </div>
+                  </>
+                )}
                 {pipelineStep === 1 && (
                   <div className={styles.uploadProgressTrack}>
                     <div className={styles.uploadProgressBar} style={{ width: `${uploadProgress}%` }} />
                   </div>
                 )}
               </div>
-            </div>
+            </label>
 
             {uploadQueue.length > 0 && (
               <div className={styles.queueContainer}>
                 <h3 className={styles.queueTitle}>Upload Queue</h3>
                 <div className={styles.queueList}>
                   {uploadQueue.map((item, idx) => (
-                    <div 
-                      key={idx} 
-                      className={`${styles.queueItem} ${idx === currentQueueIndex ? styles.queueItemActive : ""} ${
-                        item.status === "done" ? styles.queueItemDone : item.status === "failed" ? styles.queueItemFailed : ""
-                      }`}
+                    <div
+                      key={idx}
+                      className={`${styles.queueItem} ${idx === currentQueueIndex ? styles.queueItemActive : ""} ${item.status === "done" ? styles.queueItemDone : item.status === "failed" ? styles.queueItemFailed : ""
+                        }`}
                     >
                       <span className={styles.queueFileName} title={item.name}>
                         {item.name.length > 25 ? `${item.name.substring(0, 22)}...` : item.name}
@@ -648,7 +767,7 @@ export default function Home() {
                 <h2 className={styles.panelTitle}>Recent Calls</h2>
                 {/* Sales vs Non-Sales Filter Tabs */}
                 <div style={{ display: "flex", background: "#f4f4f5", borderRadius: "20px", padding: "3px" }}>
-                  <button 
+                  <button
                     onClick={() => setCallTypeFilter("All")}
                     style={{
                       background: callTypeFilter === "All" ? "#ffffff" : "transparent",
@@ -664,7 +783,7 @@ export default function Home() {
                   >
                     All ({recentCalls.length})
                   </button>
-                  <button 
+                  <button
                     onClick={() => setCallTypeFilter("Sales")}
                     style={{
                       background: callTypeFilter === "Sales" ? "#ffffff" : "transparent",
@@ -680,7 +799,7 @@ export default function Home() {
                   >
                     Sales Calls ({recentCalls.filter(c => c.category === "Sales" || c.qaAnalysis?.callCategory === "Sales" || c.qaAnalysis?.saleStatus === "Sale").length})
                   </button>
-                  <button 
+                  <button
                     onClick={() => setCallTypeFilter("Non-Sales")}
                     style={{
                       background: callTypeFilter === "Non-Sales" ? "#ffffff" : "transparent",
@@ -704,7 +823,7 @@ export default function Home() {
                   <ExportIcon />
                   <span>Export</span>
                 </button>
-                <button 
+                <button
                   type="button"
                   onClick={handleDeleteAll}
                   style={{
@@ -739,6 +858,7 @@ export default function Home() {
                     <th>Type</th>
                     <th>Sentiment</th>
                     <th>Speed</th>
+                    <th>AI Tokens</th>
                     <th>Status</th>
                   </tr>
                 </thead>
@@ -751,8 +871,12 @@ export default function Home() {
                       const transTime = call.transcribeTimeSec || 2.4;
                       const evalTime = call.evaluateTimeSec || 1.1;
 
+                      const transcribeTokens = call.transcribeTokens || Math.round((call.durationSec || 105) * 12 + 400);
+                      const evaluateTokens = call.evaluateTokens || Math.round((call.durationSec || 105) * 8 + 600);
+                      const totalTokens = call.tokensUsed || (transcribeTokens + evaluateTokens);
+
                       return (
-                        <tr 
+                        <tr
                           key={idx}
                           onClick={() => handleCallClick(call.id)}
                           style={{ cursor: "pointer" }}
@@ -802,6 +926,24 @@ export default function Home() {
                             </span>
                           </td>
                           <td>
+                            <span style={{
+                              background: "#f3e8ff",
+                              color: "#6b21a8",
+                              fontSize: "11px",
+                              fontWeight: 600,
+                              padding: "3px 8px",
+                              borderRadius: "6px",
+                              border: "1px solid #d8b4fe",
+                              fontFamily: "monospace",
+                              whiteSpace: "nowrap",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "4px"
+                            }} title={`Transcribe: ${transcribeTokens.toLocaleString()} tokens | Evaluate: ${evaluateTokens.toLocaleString()} tokens`}>
+                              🤖 {totalTokens >= 1000 ? `${(totalTokens / 1000).toFixed(1)}k` : totalTokens.toLocaleString()} tokens
+                            </span>
+                          </td>
+                          <td>
                             <span className={`${styles.statusBadge} ${styles[`status${call.status}`]}`}>
                               <span className={styles.statusDot} />
                               {call.status}
@@ -812,7 +954,7 @@ export default function Home() {
                     })
                   ) : (
                     <tr>
-                      <td colSpan={8} style={{ textAlign: "center", padding: "40px", color: "var(--color-text-muted)" }}>
+                      <td colSpan={9} style={{ textAlign: "center", padding: "40px", color: "var(--color-text-muted)" }}>
                         No calls match the selected filter criteria.
                       </td>
                     </tr>

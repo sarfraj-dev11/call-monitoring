@@ -323,7 +323,7 @@ You must return your output ONLY in a valid JSON object matching the following s
                 maxOutputTokens: 65536
               }
             }),
-            signal: AbortSignal.timeout(60000) // 1 minute timeout per evaluation attempt
+            signal: AbortSignal.timeout(900000) // 15 minutes timeout window to allow full Gemini processing
           });
 
           if (!response.ok) {
@@ -369,6 +369,11 @@ You must return your output ONLY in a valid JSON object matching the following s
         }
       }
 
+      const usageMetadata = completionData?.usageMetadata;
+      const promptTokens = usageMetadata?.promptTokenCount || Math.round(transcript.reduce((acc: number, t: any) => acc + (t.text || "").split(/\s+/).length, 0) * 1.3 + 1200);
+      const candidateTokens = usageMetadata?.candidatesTokenCount || 850;
+      const evaluateTokens = usageMetadata?.totalTokenCount || (promptTokens + candidateTokens);
+
       const candidate = completionData.candidates?.[0];
       const finishReason = candidate?.finishReason;
       if (finishReason === "MAX_TOKENS") {
@@ -381,9 +386,11 @@ You must return your output ONLY in a valid JSON object matching the following s
       }
 
       evaluationResult = safeParseJson(structuredResponseText);
+      evaluationResult.evaluateTokens = evaluateTokens;
     } catch (geminiErr: any) {
       console.warn("Gemini evaluation failed completely. Falling back to local heuristic evaluation:", geminiErr);
       evaluationResult = generateFallbackEvaluation(transcript, agentName);
+      (evaluationResult as any).evaluateTokens = Math.round(transcript.reduce((acc: number, t: any) => acc + (t.text || "").split(/\s+/).length, 0) * 1.3 + 850);
     }
 
     // DYNAMIC MATHEMATICAL SCORING CALCULATIONS

@@ -25,7 +25,11 @@ async function transcribeAndEvaluateWithGemini(
       durationContext = `The total duration of this audio file is exactly ${minutes} minute(s) and ${seconds} second(s). You must calibrate your output timestamps to fit across this full duration correctly, and ensure the final turns align with the end of the audio file.`;
     }
 
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`;
+    const modelEndpoints = [
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiApiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey}`
+    ];
     let completionData: any = null;
 
     // Fast Path: For files <= 20MB, use inline Base64 data to skip File API upload & polling latency
@@ -33,11 +37,12 @@ async function transcribeAndEvaluateWithGemini(
       console.log(`Using high-speed inline Base64 transcription for ${fileName} (${(fileBuffer.length / (1024 * 1024)).toFixed(2)} MB)...`);
       const base64Data = fileBuffer.toString("base64");
       let genAttempts = 0;
-      const maxGenAttempts = 3;
+      const maxGenAttempts = modelEndpoints.length * 2;
 
       while (genAttempts < maxGenAttempts) {
+        const currentEndpoint = modelEndpoints[genAttempts % modelEndpoints.length];
         try {
-          const genResponse = await fetch(geminiUrl, {
+          const genResponse = await fetch(currentEndpoint, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -67,16 +72,16 @@ async function transcribeAndEvaluateWithGemini(
                 maxOutputTokens: 65536
               }
             }),
-            signal: AbortSignal.timeout(300000) // 5 minutes max
+            signal: AbortSignal.timeout(900000) // 15 minutes max
           });
 
           if (!genResponse.ok) {
             const errText = await genResponse.text();
             const isTransient = genResponse.status === 429 || genResponse.status === 503 || genResponse.status === 500 || errText.toLowerCase().includes("high demand") || errText.toLowerCase().includes("rate limit") || errText.toLowerCase().includes("temporary");
-            
+
             if (isTransient && genAttempts + 1 < maxGenAttempts) {
               genAttempts++;
-              await new Promise((r) => setTimeout(r, 1000 * genAttempts));
+              await new Promise((r) => setTimeout(r, 2000 * genAttempts));
               continue;
             }
             throw new Error(`Gemini inline generateContent failed: ${genResponse.status} ${genResponse.statusText} - ${errText}`);
@@ -87,7 +92,7 @@ async function transcribeAndEvaluateWithGemini(
         } catch (err: any) {
           if (genAttempts + 1 < maxGenAttempts) {
             genAttempts++;
-            await new Promise((r) => setTimeout(r, 1000 * genAttempts));
+            await new Promise((r) => setTimeout(r, 2000 * genAttempts));
             continue;
           }
           throw err;
@@ -107,7 +112,7 @@ async function transcribeAndEvaluateWithGemini(
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ file: { displayName: fileName } }),
-        signal: AbortSignal.timeout(60000)
+        signal: AbortSignal.timeout(900000)
       });
 
       if (!initRes.ok) throw new Error(`Initiate upload failed: ${initRes.status}`);
@@ -123,7 +128,7 @@ async function transcribeAndEvaluateWithGemini(
           "Content-Length": fileBuffer.length.toString(),
         },
         body: fileBlob,
-        signal: AbortSignal.timeout(600000)
+        signal: AbortSignal.timeout(900000)
       });
 
       if (!uploadRes.ok) throw new Error(`Upload bytes failed: ${uploadRes.status}`);
@@ -137,13 +142,14 @@ async function transcribeAndEvaluateWithGemini(
       while (fileState === "PROCESSING" && attempts < 30) {
         await new Promise((r) => setTimeout(r, 1500));
         attempts++;
-        const statusRes = await fetch(statusUrl, { signal: AbortSignal.timeout(30000) });
+        const statusRes = await fetch(statusUrl, { signal: AbortSignal.timeout(300000) });
         if (statusRes.ok) {
           const statusData = await statusRes.json();
           fileState = statusData.state || "ACTIVE";
         }
       }
 
+      const geminiUrl = modelEndpoints[0];
       const genResponse = await fetch(geminiUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -157,14 +163,14 @@ async function transcribeAndEvaluateWithGemini(
           systemInstruction: { parts: [{ text: systemPrompt }] },
           generationConfig: { responseMimeType: "application/json", temperature: 0.1, maxOutputTokens: 65536 }
         }),
-        signal: AbortSignal.timeout(600000)
+        signal: AbortSignal.timeout(900000)
       });
 
       completionData = await genResponse.json();
 
       try {
-        fetch(`https://generativelanguage.googleapis.com/v1beta/${fileApiName}?key=${geminiApiKey}`, { method: "DELETE" }).catch(() => {});
-      } catch (e) {}
+        fetch(`https://generativelanguage.googleapis.com/v1beta/${fileApiName}?key=${geminiApiKey}`, { method: "DELETE" }).catch(() => { });
+      } catch (e) { }
     }
 
     const candidate = completionData.candidates?.[0];
@@ -178,7 +184,10 @@ async function transcribeAndEvaluateWithGemini(
       throw new Error("Gemini returned empty response");
     }
 
-    return safeParseJson(structuredResponseText);
+    return {
+      parsedData: safeParseJson(structuredResponseText),
+      usageMetadata: completionData?.usageMetadata
+    };
   } catch (error: any) {
     console.error("Error in transcribeAndEvaluateWithGemini:", error);
     throw error;
@@ -208,7 +217,7 @@ export async function POST(request: Request) {
     try {
       const uploadsDir = path.join(process.cwd(), "public", "uploads");
       await fs.mkdir(uploadsDir, { recursive: true });
-      
+
       const arrayBuffer = await file.arrayBuffer();
       const buffer = Buffer.from(arrayBuffer);
 
@@ -227,7 +236,7 @@ export async function POST(request: Request) {
       const fileName = `${Date.now()}.${fileExtension}`;
       const filePath = path.join(uploadsDir, fileName);
       await fs.writeFile(filePath, buffer);
-      
+
       audioUrl = `/api/audio?file=${fileName}`;
     } catch (fsErr: any) {
       console.error("Failed to save audio file to disk:", fsErr);
@@ -296,13 +305,16 @@ You must return your output ONLY in a valid JSON object matching the following s
 
     const finalDurationSec = serverParsedDurationSec || durationSec || 0;
 
-    let finalResult;
+    let geminiResult: any;
     try {
-      finalResult = await transcribeAndEvaluateWithGemini(file, geminiApiKey, systemPromptTranscribe, finalDurationSec);
+      geminiResult = await transcribeAndEvaluateWithGemini(file, geminiApiKey, systemPromptTranscribe, finalDurationSec);
     } catch (geminiErr: any) {
-      console.error("Gemini File API path failed:", geminiErr);
+      console.error("Gemini transcription API failed:", geminiErr);
       return NextResponse.json({ error: `Gemini processing failed: ${geminiErr.message}` }, { status: 500 });
     }
+
+    const finalResult = geminiResult.parsedData || {};
+    const usageMetadata = geminiResult.usageMetadata;
 
     // Post-processing Phonetic Vocabulary & Pseudo Name Correction Engine
     // Correct common speech-to-text misrecognitions for company name "Brocus" and Agent Pseudo Names
@@ -317,7 +329,7 @@ You must return your output ONLY in a valid JSON object matching the following s
           if (match[0] === match[0].toUpperCase()) return "Brocus";
           return "brocus";
         });
-      
+
       // Perform pseudo-name phonetic replacement
       cleaned = replacePseudoNamesInText(cleaned);
       return cleaned;
@@ -325,9 +337,9 @@ You must return your output ONLY in a valid JSON object matching the following s
 
     let processedTranscript = Array.isArray(finalResult.transcript)
       ? finalResult.transcript.map((t: any) => ({
-          ...t,
-          text: correctVocabularyText(t.text || ""),
-        }))
+        ...t,
+        text: correctVocabularyText(t.text || ""),
+      }))
       : [];
 
     // Parse actual duration in seconds from transcript timestamps, defaulting to client duration if provided
@@ -350,6 +362,11 @@ You must return your output ONLY in a valid JSON object matching the following s
     if (!calculatedDurationSec || isNaN(calculatedDurationSec)) {
       calculatedDurationSec = 105;
     }
+
+    // Calculate AI token counts
+    const promptTokens = usageMetadata?.promptTokenCount || Math.round((calculatedDurationSec * 4.3) + 550);
+    const candidateTokens = usageMetadata?.candidatesTokenCount || Math.round(processedTranscript.reduce((acc: number, t: any) => acc + (t.text || "").split(/\s+/).length, 0) * 1.3);
+    const transcribeTokens = usageMetadata?.totalTokenCount || (promptTokens + candidateTokens);
 
     const formatDuration = (totalSeconds: number): string => {
       const roundedSeconds = Math.round(totalSeconds);
@@ -388,6 +405,8 @@ You must return your output ONLY in a valid JSON object matching the following s
       transcript: processedTranscript,
       transcribeTimeMs,
       transcribeTimeSec,
+      transcribeTokens,
+      tokensUsed: transcribeTokens,
       evaluation: null,
       qaAnalysis: null,
       audioUrl
