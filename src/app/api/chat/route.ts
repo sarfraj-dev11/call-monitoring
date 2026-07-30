@@ -3,7 +3,8 @@ import { NextResponse } from "next/server";
 export async function POST(request: Request) {
   try {
     const { messages, crmContext } = await request.json();
-    const geminiApiKey = process.env.GEMINI_API_KEY;
+    const rawKey = process.env.GEMINI_API_KEY || "";
+    const geminiApiKey = rawKey.trim().replace(/^["']|["']$/g, "");
 
     if (!geminiApiKey) {
       return NextResponse.json(
@@ -85,7 +86,7 @@ INSTRUCTIONS:
       parts: [{ text: m.text }]
     }));
 
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`, {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

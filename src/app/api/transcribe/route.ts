@@ -26,9 +26,9 @@ async function transcribeAndEvaluateWithGemini(
     }
 
     const modelEndpoints = [
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`,
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiApiKey}`,
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey}`
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${geminiApiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${geminiApiKey}`
     ];
     let completionData: any = null;
 
@@ -295,7 +295,8 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const routeStartTime = Date.now();
   try {
-    const geminiApiKey = process.env.GEMINI_API_KEY;
+    const rawKey = process.env.GEMINI_API_KEY || "";
+    const geminiApiKey = rawKey.trim().replace(/^["']|["']$/g, "");
     if (!geminiApiKey) {
       return NextResponse.json({ error: "Gemini API key not set in environment" }, { status: 500 });
     }
@@ -462,9 +463,9 @@ Return ONLY a single valid JSON object with this EXACT structure:
 }`;
 
       const modelEndpoints = [
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`,
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiApiKey}`,
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey}`
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${geminiApiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${geminiApiKey}`
       ];
 
       let completionData: any = null;

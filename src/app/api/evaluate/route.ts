@@ -164,7 +164,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Missing or invalid transcript array" }, { status: 400 });
     }
 
-    const geminiApiKey = process.env.GEMINI_API_KEY;
+    const rawKey = process.env.GEMINI_API_KEY || "";
+    const geminiApiKey = rawKey.trim().replace(/^["']|["']$/g, "");
     if (!geminiApiKey) {
       return NextResponse.json({ error: "Gemini API key not set in environment" }, { status: 500 });
     }
@@ -290,7 +291,7 @@ You must return your output ONLY in a valid JSON object matching the following s
     let evaluationResult;
     try {
       // 4. Generate content with retries for transient errors
-      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`;
+      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey}`;
       let evalAttempts = 0;
       const maxEvalAttempts = 4;
       let completionData: any = null;
