@@ -335,6 +335,20 @@ export default function Home() {
   const [isAiPaused, setIsAiPaused] = useState<boolean>(false);
   const [evaluatingCallId, setEvaluatingCallId] = useState<string | null>(null);
 
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const isCancelledRef = useRef<boolean>(false);
+
+  const handleCancelTranscription = () => {
+    isCancelledRef.current = true;
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    setPipelineStep(0);
+    setUploadProgress(0);
+    setUploadedFile(null);
+    setUploadQueue([]);
+  };
+
   useEffect(() => {
     // Real-time Firestore sync
     const unsubscribe = onSnapshot(collection(db, "calls"), (snapshot) => {
@@ -577,7 +591,12 @@ export default function Home() {
     const queue = fileList.map(f => ({ name: f.name, status: "pending" as const }));
     setUploadQueue(queue);
 
+    isCancelledRef.current = false;
+    abortControllerRef.current = new AbortController();
+
     for (let i = 0; i < fileList.length; i++) {
+      if (isCancelledRef.current) break;
+
       const file = fileList[i];
       setCurrentQueueIndex(i);
       setUploadedFile(file);
@@ -1129,9 +1148,44 @@ export default function Home() {
             >
               <div className={styles.dropZoneContent}>
                 <FilePlusIcon />
-                <span className={styles.dropZoneTitle}>
-                  {isDragging ? "📥 Drop Audio Files or Folder Here!" : getDropzoneText()}
-                </span>
+                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                  <span className={styles.dropZoneTitle}>
+                    {isDragging ? "📥 Drop Audio Files or Folder Here!" : getDropzoneText()}
+                  </span>
+
+                  {pipelineStep > 0 && pipelineStep < 5 && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        handleCancelTranscription();
+                      }}
+                      style={{
+                        background: "#ef4444",
+                        color: "#ffffff",
+                        border: "none",
+                        borderRadius: "20px",
+                        padding: "6px 14px",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "6px",
+                        fontSize: "12px",
+                        fontWeight: 600,
+                        cursor: "pointer",
+                        boxShadow: "0 2px 8px rgba(239, 68, 68, 0.35)",
+                        transition: "all 0.2s ease"
+                      }}
+                      title="Stop / Cancel Call Processing"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                      </svg>
+                      <span>Stop Call</span>
+                    </button>
+                  )}
+                </div>
                 {pipelineStep === 0 && !isDragging && (
                   <>
                     <span className={styles.dropZoneSubtitle}>or drag files & folders here (multiple allowed)</span>
