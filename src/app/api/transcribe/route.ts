@@ -470,7 +470,98 @@ Return ONLY a single valid JSON object with this EXACT structure:
 
       audioUrl = `/api/audio?file=${fileName}`;
 
-      // Local Open-Source Whisper AI Transcriber (100% FREE & UNLIMITED)
+      // 1. Groq Whisper API Transcriber (100% FREE, Ultra-Fast 200x speed)
+      const groqApiKey = process.env.GROQ_API_KEY;
+      if (groqApiKey) {
+        try {
+          console.log(`Sending ${file.name} to Groq Whisper API (whisper-large-v3)...`);
+          const groqForm = new FormData();
+          const fileBlob = new Blob([buffer], { type: file.type || "audio/mp3" });
+          groqForm.append("file", fileBlob, file.name || "audio.mp3");
+          groqForm.append("model", "whisper-large-v3");
+          groqForm.append("response_format", "verbose_json");
+
+          const groqRes = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${groqApiKey}` },
+            body: groqForm
+          });
+
+          if (groqRes.ok) {
+            const groqData = await groqRes.json();
+            const segments = groqData.segments || [];
+            let transcriptItems: any[] = [];
+            let currentSpeaker = "Agent";
+
+            if (segments.length > 0) {
+              for (const seg of segments) {
+                const secs = Math.floor(seg.start || 0);
+                const hours = Math.floor(secs / 3600);
+                const mins = Math.floor((secs % 3600) / 60);
+                const remainingSecs = secs % 60;
+                const timeStr = `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(remainingSecs).padStart(2, '0')}`;
+                transcriptItems.push({
+                  time: timeStr,
+                  speaker: currentSpeaker,
+                  text: (seg.text || "").trim()
+                });
+                currentSpeaker = currentSpeaker === "Agent" ? "Customer" : "Agent";
+              }
+            } else if (groqData.text) {
+              const sentences = groqData.text.split(/(?<=[.!?])\s+/);
+              let estSec = 0;
+              for (const sentence of sentences) {
+                if (!sentence.trim()) continue;
+                const hours = Math.floor(estSec / 3600);
+                const mins = Math.floor((estSec % 3600) / 60);
+                const remainingSecs = estSec % 60;
+                const timeStr = `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(remainingSecs).padStart(2, '0')}`;
+                transcriptItems.push({
+                  time: timeStr,
+                  speaker: currentSpeaker,
+                  text: sentence.trim()
+                });
+                currentSpeaker = currentSpeaker === "Agent" ? "Customer" : "Agent";
+                estSec += 8;
+              }
+            }
+
+            if (transcriptItems.length > 0) {
+              console.log(`Groq Whisper API successfully transcribed ${file.name} in 100% Free mode!`);
+              const transcribeTimeMs = Date.now() - routeStartTime;
+              const transcribeTimeSec = Math.round(transcribeTimeMs / 100) / 10;
+              const today = new Date();
+              const formattedToday = today.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+              const formattedIso = today.toISOString().split("T")[0];
+              const calculatedDurationSec = Math.round(groqData.duration) || serverParsedDurationSec || durationSec || 105;
+              const mins = Math.floor(calculatedDurationSec / 60);
+              const secs = Math.round(calculatedDurationSec % 60);
+              const formattedDuration = mins > 0 ? (secs > 0 ? `${mins} min ${secs} sec` : `${mins} min`) : `${secs} sec`;
+
+              return NextResponse.json({
+                agentName: "Mike Ross",
+                date: formattedToday,
+                dateStr: formattedIso,
+                duration: formattedDuration,
+                durationSec: calculatedDurationSec,
+                language: groqData.language || "English",
+                transcript: transcriptItems,
+                transcribeTimeMs,
+                transcribeTimeSec,
+                transcribeTokens: 0,
+                tokensUsed: 0,
+                evaluation: null,
+                qaAnalysis: null,
+                audioUrl
+              });
+            }
+          }
+        } catch (groqErr) {
+          console.warn("Groq Whisper API failed, falling back to Local Whisper AI...", groqErr);
+        }
+      }
+
+      // 2. Local Open-Source Whisper AI Fallback (100% FREE & UNLIMITED)
       try {
         const { spawnSync } = await import("child_process");
         const scriptPath = path.join(process.cwd(), "transcribe_whisper.py");
