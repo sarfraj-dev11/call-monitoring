@@ -5,6 +5,8 @@ import Sidebar from "@/components/Sidebar";
 import styles from "./page.module.css";
 import { useRouter } from "next/navigation";
 import { Pencil, Trash2 } from "lucide-react";
+import { db } from "@/lib/firebase";
+import { doc, updateDoc, onSnapshot, collection } from "firebase/firestore";
 
 // SVG Icons
 const PlayIcon = () => (
@@ -207,12 +209,25 @@ export default function TranscriptPage() {
     }
   };
 
-  const persistTranscriptToDatabase = (transcriptToSave: any[], audioUrlToSave?: string) => {
+  const persistTranscriptToDatabase = async (transcriptToSave: any[], audioUrlToSave?: string) => {
+    if (!activeCallId) return;
+
+    try {
+      const callRef = doc(db, "calls", activeCallId);
+      await updateDoc(callRef, {
+        transcript: transcriptToSave,
+        ...(audioUrlToSave ? { audioUrl: audioUrlToSave } : {})
+      });
+    } catch (e) {
+      console.warn("Firestore transcript update notice:", e);
+    }
+
+    // Backup to localStorage
     const storedDb = localStorage.getItem("all_calls_database");
-    if (storedDb && activeCallId) {
+    if (storedDb) {
       try {
-        const db = JSON.parse(storedDb);
-        const updatedDb = db.map((c: any) => {
+        const localDb = JSON.parse(storedDb);
+        const updatedDb = localDb.map((c: any) => {
           if (c.id === activeCallId) {
             return {
               ...c,
@@ -224,67 +239,58 @@ export default function TranscriptPage() {
         });
         localStorage.setItem("all_calls_database", JSON.stringify(updatedDb));
         setAllCalls(updatedDb);
-      } catch (e) {
-        console.error("Failed to persist transcript changes to database", e);
-      }
+      } catch (e) {}
     }
   };
 
   const loadCallData = (selectedId?: string) => {
-    const storedDb = localStorage.getItem("all_calls_database");
-    if (storedDb) {
-      try {
-        const db = JSON.parse(storedDb);
-        setAllCalls(db);
-        
-        const activeId = selectedId || localStorage.getItem("active_call_id") || (db[0]?.id);
-        setActiveCallId(activeId);
-        
-        const activeCall = db.find((c: any) => c.id === activeId);
-        
-        if (activeCall) {
-          setHasData(true);
-          const initialTranscript = activeCall.transcript || [];
-          setTranscriptData(initialTranscript);
-          setMetadata([
-            { label: "Call ID", value: activeCall.id, highlight: true },
-            { label: "Agent", value: activeCall.agent || "AI Agent" },
-            { label: "Date", value: activeCall.date || "N/A" },
-            { label: "Duration", value: activeCall.duration || "N/A" },
-            { label: "Language", value: "English" },
-            { label: "AI Status", value: activeCall.status || "Pending" },
-          ]);
-          setDurationSec(activeCall.durationSec || 105);
-          localStorage.setItem("active_call_id", activeCall.id);
+    const activeId = selectedId || localStorage.getItem("active_call_id");
+    if (!activeId) return;
 
-          // Bind audio URL
-          let audioFileUrl = activeCall.audioUrl || sessionStorage.getItem("active_audio_blob_url");
-          if (audioFileUrl) {
-            if (audioFileUrl.startsWith("/uploads/")) {
-              const fileName = audioFileUrl.replace("/uploads/", "");
-              audioFileUrl = `/api/audio?file=${fileName}`;
-            }
-            setAudioSrc(audioFileUrl);
-            setHasRealAudio(true);
-          } else {
-            setAudioSrc("");
-            setHasRealAudio(false);
+    setActiveCallId(activeId);
+    localStorage.setItem("active_call_id", activeId);
+
+    // Real-Time Listener on active call document in Firestore
+    const unsubscribe = onSnapshot(doc(db, "calls", activeId), (docSnap) => {
+      if (docSnap.exists()) {
+        setHasData(true);
+        const activeCall = { id: docSnap.id, ...docSnap.data() } as any;
+        const initialTranscript = activeCall.transcript || [];
+        setTranscriptData(initialTranscript);
+        setMetadata([
+          { label: "Call ID", value: activeCall.id, highlight: true },
+          { label: "Agent", value: activeCall.agent || "AI Agent" },
+          { label: "Date", value: activeCall.date || "N/A" },
+          { label: "Duration", value: activeCall.duration || "N/A" },
+          { label: "Language", value: activeCall.language || "English" },
+          { label: "AI Status", value: activeCall.status || "Pending" },
+        ]);
+        setDurationSec(activeCall.durationSec || 105);
+
+        let audioFileUrl = activeCall.audioUrl || sessionStorage.getItem("active_audio_blob_url");
+        if (audioFileUrl) {
+          if (audioFileUrl.startsWith("/uploads/")) {
+            const fileName = audioFileUrl.replace("/uploads/", "");
+            audioFileUrl = `/api/audio?file=${fileName}`;
           }
+          setAudioSrc(audioFileUrl);
+          setHasRealAudio(true);
+        } else {
+          setAudioSrc("");
+          setHasRealAudio(false);
+        }
 
-          // Initialize history stack with loaded call state
+        if (historyStackRef.current.length === 0) {
           historyStackRef.current = [{ transcript: JSON.parse(JSON.stringify(initialTranscript)), audioSrc: audioFileUrl || "" }];
           historyIndexRef.current = 0;
           updateUndoRedoState();
-        } else {
-          setHasData(false);
         }
-      } catch (e) {
-        console.error("Failed to parse database", e);
-        setHasData(false);
       }
-    } else {
-      setHasData(false);
-    }
+    }, (err) => {
+      console.warn("Firestore call doc snapshot notice:", err);
+    });
+
+    return unsubscribe;
   };
 
   const runAiEvaluation = async () => {

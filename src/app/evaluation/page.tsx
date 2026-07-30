@@ -3,6 +3,8 @@
 import React, { useState, useEffect } from "react";
 import Sidebar from "@/components/Sidebar";
 import styles from "./page.module.css";
+import { db } from "@/lib/firebase";
+import { collection, onSnapshot, doc, updateDoc } from "firebase/firestore";
 
 // SVG Icons
 const SuccessIcon = () => (
@@ -417,44 +419,34 @@ export default function EvaluationPage() {
         ? JSON.parse(localStorage.getItem("qa_feedback_history")!)
         : null;
 
-      const response = await fetch("/api/evaluate", {
+      const evalRes = await fetch("/api/evaluate", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          transcript: activeCall.transcript,
-          agentName: activeCall.agent,
+          transcript: activeCall.transcript || [],
+          agentName: activeCall.agent || "Rahul M.",
           customScorecard,
           feedbackHistory
         })
       });
 
-      if (!response.ok) {
-        throw new Error("Failed to evaluate transcript");
+      if (!evalRes.ok) throw new Error("Evaluation request failed");
+      const evalData = await evalRes.json();
+
+      if (evalData && (evalData.evaluation || evalData.qaAnalysis)) {
+        const updatedCall = {
+          ...activeCall,
+          score: evalData.evaluation?.qaScore || (evalData.qaAnalysis?.checklist ? 90 : 85),
+          status: "Reviewed",
+          sentiment: evalData.sentiment || "Positive",
+          category: evalData.category || "Sales",
+          evaluation: evalData.evaluation || null,
+          qaAnalysis: evalData.qaAnalysis || null
+        };
+
+        // Save to Firestore!
+        await updateDoc(doc(db, "calls", activeCallId), updatedCall);
       }
-
-      const evalData = await response.json();
-
-      // Merge the evaluation data back into the call object
-      activeCall.evaluation = evalData.evaluation;
-      activeCall.qaAnalysis = evalData.qaAnalysis;
-      activeCall.score = evalData.evaluation?.qaScore || 85;
-      activeCall.status = "Reviewed";
-      activeCall.sentiment = evalData.sentiment || "Neutral";
-      activeCall.category = evalData.category || "Sales";
-      activeCall.language = evalData.language || activeCall.language || "English (India)";
-      activeCall.negativePhrases = evalData.negativePhrases || [];
-      activeCall.agentTime = evalData.agentTime || 50;
-      activeCall.customerTime = evalData.customerTime || 50;
-      activeCall.silenceTime = evalData.silenceTime || 0;
-
-      // Update local storage database
-      const updatedDb = db.map((c: any) => c.id === activeCallId ? activeCall : c);
-      localStorage.setItem("all_calls_database", JSON.stringify(updatedDb));
-
-      // Refresh view
-      loadCallData(activeCallId);
     } catch (e: any) {
       console.error(e);
       alert(`AI evaluation failed: ${e.message}`);
@@ -462,10 +454,6 @@ export default function EvaluationPage() {
       setIsEvaluating(false);
     }
   };
-
-  useEffect(() => {
-    loadCallData();
-  }, []);
 
   const handleCallSelect = (id: string) => {
     loadCallData(id);

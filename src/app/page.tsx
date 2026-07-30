@@ -4,6 +4,9 @@ import { useState, useEffect, useRef } from "react";
 import Sidebar from "@/components/Sidebar";
 import styles from "./page.module.css";
 import { useRouter } from "next/navigation";
+import { db, storage } from "@/lib/firebase";
+import { collection, onSnapshot, doc, setDoc, deleteDoc, getDocs, writeBatch, updateDoc, query, orderBy } from "firebase/firestore";
+import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 
 // SVG Icons
 const FilePlusIcon = () => (
@@ -333,20 +336,34 @@ export default function Home() {
   const [evaluatingCallId, setEvaluatingCallId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (typeof window !== "undefined") {
+    // Real-time Firestore sync
+    const unsubscribe = onSnapshot(collection(db, "calls"), (snapshot) => {
+      const calls: Call[] = [];
+      snapshot.forEach((docSnap) => {
+        calls.push({ id: docSnap.id, ...docSnap.data() } as Call);
+      });
+      // Sort newest first
+      calls.sort((a, b) => (b.dateStr || "").localeCompare(a.dateStr || "") || b.id.localeCompare(a.id));
+      setRecentCalls(calls);
+      try {
+        localStorage.setItem("all_calls_database", JSON.stringify(calls));
+      } catch (e) {}
+    }, (err) => {
+      console.warn("Firestore snapshot notice:", err);
       const stored = localStorage.getItem("all_calls_database");
       if (stored) {
-        try {
-          setRecentCalls(JSON.parse(stored));
-        } catch (e) {
-          console.error("Failed to load calls database", e);
-        }
+        try { setRecentCalls(JSON.parse(stored)); } catch (e) {}
       }
+    });
+
+    if (typeof window !== "undefined") {
       const savedAiPause = localStorage.getItem("is_ai_paused");
       if (savedAiPause !== null) {
         setIsAiPaused(savedAiPause === "true");
       }
     }
+
+    return () => unsubscribe();
   }, []);
 
   const toggleAiPause = () => {
@@ -397,12 +414,11 @@ export default function Home() {
             tokensUsed: (callToEval.transcribeTokens || 1000) + evaluateTokens,
           };
 
-          const stored = localStorage.getItem("all_calls_database");
-          if (stored) {
-            const db = JSON.parse(stored);
-            const updatedDb = db.map((c: any) => (c.id === callId ? updatedCall : c));
-            localStorage.setItem("all_calls_database", JSON.stringify(updatedDb));
-            setRecentCalls(updatedDb);
+          // Save to Firestore!
+          try {
+            await setDoc(doc(db, "calls", callId), updatedCall);
+          } catch (fsErr) {
+            console.error("Failed to update Firestore:", fsErr);
           }
         }
       }
@@ -510,6 +526,14 @@ export default function Home() {
     }
 
     try {
+      // Clear Firestore calls collection
+      const snapshot = await getDocs(collection(db, "calls"));
+      const batch = writeBatch(db);
+      snapshot.forEach((docSnap) => {
+        batch.delete(docSnap.ref);
+      });
+      await batch.commit();
+
       localStorage.removeItem("all_calls_database");
       localStorage.removeItem("active_call_id");
       localStorage.removeItem("last_call_analysis");
@@ -519,7 +543,7 @@ export default function Home() {
       await fetch("/api/audio", { method: "DELETE" }).catch(e => console.error("Failed to delete audio files from server:", e));
 
       setShowDeleteConfirm(false);
-      alert("All calls, local metrics, and audio files have been deleted successfully.");
+      alert("All calls, cloud database records, and audio files have been deleted successfully.");
     } catch (e) {
       console.error("Failed to clear data:", e);
     }
@@ -572,15 +596,6 @@ export default function Home() {
       }, 100);
 
       try {
-        if (typeof window !== "undefined") {
-          try {
-            const audioUrl = URL.createObjectURL(file);
-            sessionStorage.setItem("active_audio_blob_url", audioUrl);
-          } catch (e) {
-            console.error("Failed to create audio URL", e);
-          }
-        }
-
         let durationSec = 0;
         try {
           durationSec = await getAudioDuration(file);
@@ -589,13 +604,35 @@ export default function Home() {
           console.error("Failed to get audio duration:", durErr);
         }
 
-        const formData = new FormData();
-        formData.append("file", file);
-        if (durationSec > 0) {
-          formData.append("durationSec", durationSec.toString());
-        }
+        // Step 1: Direct Upload to Firebase Storage (Bypasses Vercel 4.5MB Payload limit!)
+        setPipelineStep(1); // Uploading
+        const cleanFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const storagePath = `calls/${Date.now()}_${cleanFileName}`;
+        const storageRef = ref(storage, storagePath);
+        const uploadTask = uploadBytesResumable(storageRef, file);
 
-        setPipelineStep(2); // Transcribing with Groq / Local Whisper AI
+        const uploadedAudioUrl = await new Promise<string>((resolve, reject) => {
+          uploadTask.on(
+            "state_changed",
+            (snapshot) => {
+              const progress = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
+              setUploadProgress(progress);
+            },
+            (error) => {
+              console.error("Firebase Storage upload error:", error);
+              reject(error);
+            },
+            async () => {
+              const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
+              resolve(downloadUrl);
+            }
+          );
+        });
+
+        sessionStorage.setItem("active_audio_blob_url", uploadedAudioUrl);
+
+        // Step 2: Request transcription from server using tiny ~200 byte JSON payload containing Firebase Storage URL!
+        setPipelineStep(2); // Transcribing
 
         const transcribeStartMs = Date.now();
         let data: any = null;
@@ -607,16 +644,17 @@ export default function Home() {
           try {
             response = await fetch("/api/transcribe", {
               method: "POST",
-              body: formData,
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                audioUrl: uploadedAudioUrl,
+                fileName: file.name,
+                durationSec
+              }),
             });
 
             if (!response.ok) {
-              if (response.status === 413) {
-                data = { error: "File exceeds Vercel 4.5MB cloud upload limit. Local Whisper AI or Firebase direct upload recommended for huge files." };
-              } else {
-                const errText = await response.text();
-                data = { error: errText || `Server error (HTTP ${response.status})` };
-              }
+              const errText = await response.text();
+              data = { error: errText || `Server error (HTTP ${response.status})` };
             } else {
               data = await response.json();
             }
@@ -652,7 +690,6 @@ export default function Home() {
           }
         }
 
-        clearInterval(uploadInterval);
         setUploadProgress(100);
 
         if (!data || data.error) {
@@ -666,18 +703,7 @@ export default function Home() {
         const transcribeTimeSec = data.transcribeTimeSec || Math.round((Date.now() - transcribeStartMs) / 100) / 10;
         const transcribeTokens = data.transcribeTokens || data.tokensUsed || Math.round((data.durationSec || 105) * 12 + 450);
 
-        // Immediate Fail-Safe Saving: Save call transcript to database right after transcription finishes
-        const stored = localStorage.getItem("all_calls_database");
-        let latestDb: Call[] = [];
-        if (stored) {
-          try {
-            latestDb = JSON.parse(stored);
-          } catch (e) {
-            console.error(e);
-          }
-        }
-
-        const nextIdNum = String(latestDb.length + 1).padStart(3, "0");
+        const nextIdNum = String(recentCalls.length + 1).padStart(3, "0");
         let newCall: Call = {
           id: `CALL - ${nextIdNum}`,
           agent: data.agentName || "Rahul M.",
@@ -695,7 +721,7 @@ export default function Home() {
           transcript: data.transcript || [],
           evaluation: null,
           qaAnalysis: null,
-          audioUrl: data.audioUrl || "",
+          audioUrl: uploadedAudioUrl,
           transcribeTimeSec,
           evaluateTimeSec: 0,
           totalProcessingTimeSec: transcribeTimeSec,
@@ -704,12 +730,14 @@ export default function Home() {
           tokensUsed: transcribeTokens
         };
 
-        // Guarantee transcript is saved in localStorage immediately!
-        let updatedDb = [newCall, ...latestDb];
-        localStorage.setItem("all_calls_database", JSON.stringify(updatedDb));
-        localStorage.setItem("active_call_id", newCall.id);
-        localStorage.setItem("last_call_analysis", JSON.stringify(data));
-        setRecentCalls(updatedDb);
+        // Save new call immediately to Firestore cloud database!
+        try {
+          await setDoc(doc(db, "calls", newCall.id), newCall);
+          localStorage.setItem("active_call_id", newCall.id);
+          localStorage.setItem("last_call_analysis", JSON.stringify(data));
+        } catch (fsErr) {
+          console.error("Failed to save new call to Firestore:", fsErr);
+        }
 
         // Step 3: Auto AI Evaluation (Skipped if AI is paused)
         if (!isAiPaused) {
@@ -750,10 +778,12 @@ export default function Home() {
                   tokensUsed: transcribeTokens + evaluateTokens
                 };
 
-                // Update database with completed AI evaluation
-                updatedDb = updatedDb.map(c => c.id === newCall.id ? newCall : c);
-                localStorage.setItem("all_calls_database", JSON.stringify(updatedDb));
-                setRecentCalls(updatedDb);
+                // Update Firestore document with completed AI evaluation
+                try {
+                  await setDoc(doc(db, "calls", newCall.id), newCall);
+                } catch (fsErr) {
+                  console.error("Failed to update evaluation to Firestore:", fsErr);
+                }
               }
             }
           } catch (evalErr) {

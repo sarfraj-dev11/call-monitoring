@@ -302,13 +302,118 @@ export async function POST(request: Request) {
 
     const contentType = request.headers.get("content-type") || "";
 
-    // Direct JSON Payload with Pre-uploaded Gemini File URI (Bypasses Vercel 4.5MB Payload limit for 3-hour calls)
+    // Direct JSON Payload with Firebase Storage Audio URL or Gemini File URI (Bypasses Vercel 4.5MB Payload limit)
     if (contentType.includes("application/json")) {
       const body = await request.json();
-      const { fileUri, fileMimeType, fileName, durationSec, fileApiName } = body;
+      const { fileUri, audioUrl, fileMimeType, fileName, durationSec, fileApiName } = body;
 
-      if (!fileUri) {
-        return NextResponse.json({ error: "fileUri missing in payload" }, { status: 400 });
+      // Handle Firebase Storage Audio URL
+      if (audioUrl) {
+        try {
+          console.log(`Fetching audio directly from Firebase Storage URL: ${audioUrl.substring(0, 80)}...`);
+          const audioRes = await fetch(audioUrl);
+          if (!audioRes.ok) throw new Error(`Failed to fetch audio from Firebase Storage: ${audioRes.status}`);
+          const arrayBuffer = await audioRes.arrayBuffer();
+          const buffer = Buffer.from(arrayBuffer);
+          const fileBlob = new Blob([buffer], { type: fileMimeType || "audio/mp3" });
+          const reqFileName = fileName || "audio.mp3";
+          const reqDurationSec = Number(durationSec) || 0;
+
+          // 1. Try Groq Whisper API (Free & Fast)
+          const groqApiKey = process.env.GROQ_API_KEY;
+          if (groqApiKey) {
+            try {
+              const groqForm = new FormData();
+              groqForm.append("file", fileBlob, reqFileName);
+              groqForm.append("model", "whisper-large-v3");
+              groqForm.append("response_format", "verbose_json");
+
+              const groqRes = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+                method: "POST",
+                headers: { Authorization: `Bearer ${groqApiKey}` },
+                body: groqForm
+              });
+
+              if (groqRes.ok) {
+                const groqData = await groqRes.json();
+                const segments = groqData.segments || [];
+                let transcriptItems: any[] = [];
+                let currentSpeaker = "Agent";
+
+                if (segments.length > 0) {
+                  for (const seg of segments) {
+                    const secs = Math.floor(seg.start || 0);
+                    const hours = Math.floor(secs / 3600);
+                    const mins = Math.floor((secs % 3600) / 60);
+                    const remainingSecs = secs % 60;
+                    const timeStr = `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(remainingSecs).padStart(2, '0')}`;
+                    transcriptItems.push({
+                      time: timeStr,
+                      speaker: currentSpeaker,
+                      text: (seg.text || "").trim()
+                    });
+                    currentSpeaker = currentSpeaker === "Agent" ? "Customer" : "Agent";
+                  }
+                } else if (groqData.text) {
+                  const sentences = groqData.text.split(/(?<=[.!?])\s+/);
+                  let estSec = 0;
+                  for (const sentence of sentences) {
+                    if (!sentence.trim()) continue;
+                    const hours = Math.floor(estSec / 3600);
+                    const mins = Math.floor((estSec % 3600) / 60);
+                    const remainingSecs = estSec % 60;
+                    const timeStr = `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(remainingSecs).padStart(2, '0')}`;
+                    transcriptItems.push({
+                      time: timeStr,
+                      speaker: currentSpeaker,
+                      text: sentence.trim()
+                    });
+                    currentSpeaker = currentSpeaker === "Agent" ? "Customer" : "Agent";
+                    estSec += 8;
+                  }
+                }
+
+                if (transcriptItems.length > 0) {
+                  console.log(`Successfully transcribed audio from Firebase Storage URL via Groq Whisper!`);
+                  const transcribeTimeMs = Date.now() - routeStartTime;
+                  const transcribeTimeSec = Math.round(transcribeTimeMs / 100) / 10;
+                  const today = new Date();
+                  const formattedToday = today.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+                  const formattedIso = today.toISOString().split("T")[0];
+                  const calculatedDurationSec = Math.round(groqData.duration) || reqDurationSec || 105;
+                  const mins = Math.floor(calculatedDurationSec / 60);
+                  const secs = Math.round(calculatedDurationSec % 60);
+                  const formattedDuration = mins > 0 ? (secs > 0 ? `${mins} min ${secs} sec` : `${mins} min`) : `${secs} sec`;
+
+                  return NextResponse.json({
+                    agentName: "Mike Ross",
+                    date: formattedToday,
+                    dateStr: formattedIso,
+                    duration: formattedDuration,
+                    durationSec: calculatedDurationSec,
+                    language: groqData.language || "English",
+                    transcript: transcriptItems,
+                    transcribeTimeMs,
+                    transcribeTimeSec,
+                    transcribeTokens: 0,
+                    tokensUsed: 0,
+                    evaluation: null,
+                    qaAnalysis: null,
+                    audioUrl
+                  });
+                }
+              }
+            } catch (groqErr) {
+              console.warn("Groq transcription from Firebase Storage URL failed:", groqErr);
+            }
+          }
+        } catch (fetchErr: any) {
+          console.error("Failed to process Firebase Storage audio URL:", fetchErr);
+        }
+      }
+
+      if (!fileUri && !audioUrl) {
+        return NextResponse.json({ error: "fileUri or audioUrl missing in payload" }, { status: 400 });
       }
 
       let durationContext = "";
