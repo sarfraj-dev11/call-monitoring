@@ -334,6 +334,12 @@ export default function Home() {
 
   const [isAiPaused, setIsAiPaused] = useState<boolean>(false);
   const [evaluatingCallId, setEvaluatingCallId] = useState<string | null>(null);
+  const [completedNotification, setCompletedNotification] = useState<{
+    callId: string;
+    agent: string;
+    duration: string;
+    score: number;
+  } | null>(null);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const isCancelledRef = useRef<boolean>(false);
@@ -347,6 +353,53 @@ export default function Home() {
     setUploadProgress(0);
     setUploadedFile(null);
     setUploadQueue([]);
+  };
+
+  const triggerCompletionNotification = (call: Call) => {
+    setCompletedNotification({
+      callId: call.id,
+      agent: call.agent || "Agent",
+      duration: call.duration || "N/A",
+      score: call.score || 85
+    });
+
+    // Synthesized web audio chime
+    try {
+      if (typeof window !== "undefined" && (window.AudioContext || (window as any).webkitAudioContext)) {
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        const ctx = new AudioCtx();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+        osc.frequency.setValueAtTime(880, ctx.currentTime + 0.15);
+        gain.gain.setValueAtTime(0.15, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.4);
+      }
+    } catch (e) {}
+
+    // Browser desktop push notification
+    if (typeof window !== "undefined" && "Notification" in window) {
+      if (Notification.permission === "granted") {
+        new Notification("🎉 Call Analysis Complete", {
+          body: `${call.id} (${call.agent}) transcribed & evaluated!`,
+          icon: "/favicon.ico"
+        });
+      } else if (Notification.permission !== "denied") {
+        Notification.requestPermission().then((permission) => {
+          if (permission === "granted") {
+            new Notification("🎉 Call Analysis Complete", {
+              body: `${call.id} (${call.agent}) transcribed & evaluated!`,
+              icon: "/favicon.ico"
+            });
+          }
+        });
+      }
+    }
   };
 
   useEffect(() => {
@@ -843,6 +896,8 @@ export default function Home() {
             ? `⚡ ${transcribeTimeSec}s (Transcribed Only)`
             : `⚡ ${transcribeTimeSec}s trans. | ${newCall.evaluateTimeSec || 0}s eval.`
         } : q));
+
+        triggerCompletionNotification(newCall);
       } catch (err: any) {
         clearInterval(uploadInterval);
         console.error(`Transcription processing notice for ${file.name}: ${err.message}`);
@@ -1485,6 +1540,102 @@ export default function Home() {
           </div>
         </section>
       </main>
+
+      {/* Completion Notification Modal */}
+      {completedNotification && (
+        <div style={{
+          position: "fixed",
+          bottom: "24px",
+          right: "24px",
+          zIndex: 9999,
+          background: "linear-gradient(135deg, #18181b 0%, #09090b 100%)",
+          color: "#ffffff",
+          padding: "20px 24px",
+          borderRadius: "16px",
+          boxShadow: "0 20px 40px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.1)",
+          maxWidth: "400px",
+          width: "calc(100vw - 48px)",
+          display: "flex",
+          flexDirection: "column",
+          gap: "14px"
+        }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              <div style={{
+                background: "rgba(34, 197, 94, 0.2)",
+                color: "#4ade80",
+                width: "36px",
+                height: "36px",
+                borderRadius: "50%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: "18px"
+              }}>
+                ✓
+              </div>
+              <div>
+                <h4 style={{ margin: 0, fontSize: "15px", fontWeight: 700, color: "#ffffff" }}>Call Analysis Complete!</h4>
+                <p style={{ margin: 0, fontSize: "12px", color: "#a1a1aa" }}>{completedNotification.callId} • {completedNotification.agent}</p>
+              </div>
+            </div>
+            <button
+              onClick={() => setCompletedNotification(null)}
+              style={{ background: "transparent", border: "none", color: "#71717a", cursor: "pointer", padding: "4px", fontSize: "16px" }}
+            >
+              ✕
+            </button>
+          </div>
+
+          <div style={{ display: "flex", gap: "16px", background: "rgba(255, 255, 255, 0.05)", padding: "10px 14px", borderRadius: "10px", fontSize: "12px" }}>
+            <div><span style={{ color: "#71717a" }}>Duration:</span> <strong>{completedNotification.duration}</strong></div>
+            <div><span style={{ color: "#71717a" }}>QA Score:</span> <strong style={{ color: "#4ade80" }}>{completedNotification.score}/100</strong></div>
+          </div>
+
+          <div style={{ display: "flex", gap: "10px" }}>
+            <button
+              onClick={() => {
+                localStorage.setItem("active_call_id", completedNotification.callId);
+                setCompletedNotification(null);
+                router.push("/transcript");
+              }}
+              style={{
+                flex: 1,
+                background: "#0284c7",
+                color: "#ffffff",
+                border: "none",
+                padding: "8px 12px",
+                borderRadius: "8px",
+                fontSize: "12px",
+                fontWeight: 600,
+                cursor: "pointer"
+              }}
+            >
+              📄 View Transcript
+            </button>
+            <button
+              onClick={() => {
+                localStorage.setItem("active_call_id", completedNotification.callId);
+                setCompletedNotification(null);
+                router.push("/evaluation");
+              }}
+              style={{
+                flex: 1,
+                background: "rgba(255, 255, 255, 0.1)",
+                color: "#ffffff",
+                border: "1px solid rgba(255, 255, 255, 0.15)",
+                padding: "8px 12px",
+                borderRadius: "8px",
+                fontSize: "12px",
+                fontWeight: 600,
+                cursor: "pointer"
+              }}
+            >
+              📊 View Evaluation
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
