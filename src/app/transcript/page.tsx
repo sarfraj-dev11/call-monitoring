@@ -874,14 +874,11 @@ export default function TranscriptPage() {
   useEffect(() => {
     if (!audioSrc || !hasRealAudio || !waveformContainerRef.current) return;
 
-    // Update existing instance seamlessly without wiping DOM or flashing blank
+    // Always destroy existing instance when audioSrc changes to cleanly bind media element
     if (wavesurferRef.current) {
       try {
-        wavesurferRef.current.load(audioSrc);
-        return;
-      } catch (e) {
         wavesurferRef.current.destroy();
-      }
+      } catch (e) {}
     }
 
     const ws = WaveSurfer.create({
