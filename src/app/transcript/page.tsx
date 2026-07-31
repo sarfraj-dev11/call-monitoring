@@ -982,10 +982,24 @@ export default function TranscriptPage() {
              }
           }
           
-          if (keptWordsMeta.length !== wordsMeta.length) {
+          if (keptWordsMeta.length !== wordsMeta.length || lineStartSec >= endSec) {
              const newText = keptWordsMeta.map(w => (w.word || "").trim()).join(" ").trim();
+             let newTime = item.time;
+             if (keptWordsMeta.length > 0) {
+                const firstStart = keptWordsMeta[0].start;
+                const hrs = Math.floor(firstStart / 3600);
+                const mins = Math.floor((firstStart % 3600) / 60);
+                const secs = Math.floor(firstStart % 60);
+                newTime = `${hrs.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+             } else if (lineStartSec >= endSec) {
+                const newSec = Math.max(0, lineStartSec - duration);
+                const hrs = Math.floor(newSec / 3600);
+                const mins = Math.floor((newSec % 3600) / 60);
+                const secs = Math.floor(newSec % 60);
+                newTime = `${hrs.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+             }
              anyChanges = true;
-             return { ...item, text: newText, words: keptWordsMeta.length > 0 ? keptWordsMeta : undefined };
+             return { ...item, text: newText, words: keptWordsMeta.length > 0 ? keptWordsMeta : undefined, time: newTime };
           }
        }
        return item;
@@ -1102,7 +1116,7 @@ export default function TranscriptPage() {
           saveHistoryToStorage(activeCallId, stack, historyIndexRef.current, deletedTimeRangesRef.current);
         }
 
-        // Direct HTML5 + WaveSurfer instant update with pre-computed peaks!
+        // Direct HTML5 media update — WaveSurfer bound to media element automatically updates seamlessly without canvas flash!
         if (audioRef.current) {
           const wasPlaying = isPlaying || !audioRef.current.paused;
           audioRef.current.src = trimmedBlobUrl;
@@ -1111,12 +1125,6 @@ export default function TranscriptPage() {
           if (wasPlaying) {
             audioRef.current.play().catch(() => {});
           }
-        }
-
-        if (wavesurferRef.current) {
-          try {
-            wavesurferRef.current.load(trimmedBlobUrl, fastPeaks, trimmedBuffer.duration);
-          } catch (e) {}
         }
       }
     } catch (audioErr) {
