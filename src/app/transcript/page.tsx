@@ -115,22 +115,7 @@ function audioBufferToWavBlob(buffer: AudioBuffer): Blob {
 let currentAudioBufferCache: AudioBuffer | null = null;
 let currentAudioCallId: string = "";
 
-// Fast Peak Extractor (< 3ms) so WaveSurfer renders trimmed peaks instantly without decoding delay
-function extractAudioPeaks(buffer: AudioBuffer, numPeaks = 1000): number[][] {
-  const data = buffer.getChannelData(0);
-  const step = Math.floor(data.length / numPeaks);
-  const peaks: number[] = [];
-  for (let i = 0; i < numPeaks; i++) {
-    let max = 0;
-    const s = i * step;
-    for (let j = 0; j < step; j++) {
-      const v = Math.abs(data[s + j] || 0);
-      if (v > max) max = v;
-    }
-    peaks.push(max);
-  }
-  return [peaks];
-}
+
 
 // Pre-warm the audio buffer cache in the background without blocking the UI
 async function prewarmAudioCache(audioUrl: string, callId: string) {
@@ -1096,8 +1081,6 @@ export default function TranscriptPage() {
         currentAudioBufferCache = trimmedBuffer;
         currentAudioCallId = activeCallId;
 
-        // Compute instant peak array (< 3ms) so WaveSurfer loads trimmed graph without decoding delay
-        const fastPeaks = extractAudioPeaks(trimmedBuffer);
         const wavBlob = audioBufferToWavBlob(trimmedBuffer);
         const trimmedBlobUrl = URL.createObjectURL(wavBlob);
 
@@ -1111,7 +1094,7 @@ export default function TranscriptPage() {
           saveHistoryToStorage(activeCallId, stack, historyIndexRef.current, deletedTimeRangesRef.current);
         }
 
-        // Direct HTML5 + WaveSurfer instant update with pre-computed peaks!
+        // Direct HTML5 + WaveSurfer instant update
         if (audioRef.current) {
           const wasPlaying = isPlaying || !audioRef.current.paused;
           audioRef.current.src = trimmedBlobUrl;
@@ -1124,7 +1107,7 @@ export default function TranscriptPage() {
 
         if (wavesurferRef.current) {
           try {
-            wavesurferRef.current.load(trimmedBlobUrl, fastPeaks, trimmedBuffer.duration);
+            wavesurferRef.current.load(trimmedBlobUrl);
           } catch (e) {}
         }
       }
