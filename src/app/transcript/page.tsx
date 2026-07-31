@@ -853,20 +853,26 @@ export default function TranscriptPage() {
     if (transcriptData[index + 1]) {
        lineEndSec = timeStringToSeconds(transcriptData[index + 1].time);
     }
-    const estimatedDurationPerWord = Math.max(0.2, (lineEndSec - lineStartSec) / (oldWordsArr.length || 1));
+    const estimatedDurationPerWord = Math.min(0.35, Math.max(0.15, (lineEndSec - lineStartSec) / (oldWordsArr.length || 1)));
 
     while (oldIdx < oldWordsArr.length || newIdx < newWordsArr.length) {
        if (oldIdx < oldWordsArr.length && !keptOldIndices.has(oldIdx)) {
           // This old word was deleted
           const meta = wordsMeta[oldIdx];
           if (meta && meta.start !== undefined && meta.end !== undefined) {
-             rangesToCut.push({ start: meta.start, end: meta.end });
-             totalCutDuration += (meta.end - meta.start);
+             const cStart = Math.min(lineEndSec, meta.start);
+             const cEnd = Math.min(lineEndSec, meta.end);
+             if (cEnd > cStart) {
+                rangesToCut.push({ start: cStart, end: cEnd });
+                totalCutDuration += (cEnd - cStart);
+             }
           } else {
-             const estStart = lineStartSec + (oldIdx * estimatedDurationPerWord);
-             const estEnd = estStart + estimatedDurationPerWord;
-             rangesToCut.push({ start: estStart, end: estEnd });
-             totalCutDuration += estimatedDurationPerWord;
+             const estStart = Math.min(lineEndSec, lineStartSec + (oldIdx * estimatedDurationPerWord));
+             const estEnd = Math.min(lineEndSec, estStart + estimatedDurationPerWord);
+             if (estEnd > estStart) {
+                rangesToCut.push({ start: estStart, end: estEnd });
+                totalCutDuration += (estEnd - estStart);
+             }
           }
           oldIdx++;
        } else if (newIdx < newWordsArr.length && !keptNewIndices.has(newIdx)) {
