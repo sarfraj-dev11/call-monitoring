@@ -260,6 +260,22 @@ export default function TranscriptPage() {
     } catch (e) {}
   };
 
+  const syncWaveformRegions = (ranges: Array<{ start: number; end: number }>) => {
+    if (!wsRegionsRef.current) return;
+    try {
+      wsRegionsRef.current.getRegions().forEach((r: any) => r.remove());
+      ranges.forEach(range => {
+        wsRegionsRef.current.addRegion({
+          start: range.start,
+          end: range.end,
+          color: 'rgba(239, 68, 68, 0.35)',
+          drag: false,
+          resize: false,
+        });
+      });
+    } catch (e) {}
+  };
+
   const pushToHistory = (newTranscript: any[], newAudioSrc?: string) => {
     const src = newAudioSrc || audioSrc;
     const currentStack = historyStackRef.current;
@@ -290,6 +306,7 @@ export default function TranscriptPage() {
       const restoredRanges = state.deletedRanges || [];
       deletedTimeRangesRef.current = JSON.parse(JSON.stringify(restoredRanges));
       setDeletedRangesState(restoredRanges);
+      syncWaveformRegions(restoredRanges);
 
       if (state.audioSrc && state.audioSrc !== audioSrc) {
         setAudioSrc(state.audioSrc);
@@ -316,6 +333,7 @@ export default function TranscriptPage() {
       const restoredRanges = state.deletedRanges || [];
       deletedTimeRangesRef.current = JSON.parse(JSON.stringify(restoredRanges));
       setDeletedRangesState(restoredRanges);
+      syncWaveformRegions(restoredRanges);
 
       if (state.audioSrc && state.audioSrc !== audioSrc) {
         setAudioSrc(state.audioSrc);
@@ -913,19 +931,19 @@ export default function TranscriptPage() {
 
   const deleteWaveformRegion = (startSec: number, endSec: number) => {
     if (endSec <= startSec) return;
-    const duration = endSec - startSec;
+
+    // 1. Add to deleted time ranges for 1ms non-destructive skipping
+    deletedTimeRangesRef.current.push({ start: startSec, end: endSec });
+    setDeletedRangesState([...deletedTimeRangesRef.current]);
+    syncWaveformRegions(deletedTimeRangesRef.current);
     
-    // 1. Snip the audio instantly via in-memory cache
-    executeAudioCut(startSec, endSec);
-    
-    // 2. Diff the transcript
+    // 2. Diff the transcript in < 1ms
     let anyChanges = false;
     
     const updatedTranscript = transcriptData.map((item, index) => {
        const lineStartSec = timeStringToSeconds(item.time);
        let wordsMeta = item.words;
        
-       // Fallback: If no word-level timestamps exist, approximate them!
        if (!wordsMeta || wordsMeta.length === 0) {
           const textWords = (item.text || "").split(/\s+/).filter(Boolean);
           let nextTime = lineStartSec + 5;
@@ -947,30 +965,14 @@ export default function TranscriptPage() {
              if (wordCenter >= startSec && wordCenter <= endSec) {
                 anyChanges = true;
              } else {
-                if (w.start >= endSec) {
-                   keptWordsMeta.push({
-                      ...w,
-                      start: Math.max(0, w.start - duration),
-                      end: Math.max(0, w.end - duration)
-                   });
-                } else {
-                   keptWordsMeta.push(w);
-                }
+                keptWordsMeta.push(w);
              }
           }
           
-          if (keptWordsMeta.length !== wordsMeta.length || keptWordsMeta.some((w, i) => w.start !== wordsMeta[i].start)) {
+          if (keptWordsMeta.length !== wordsMeta.length) {
              const newText = keptWordsMeta.map(w => (w.word || "").trim()).join(" ").trim();
-             let newTime = item.time;
-             if (lineStartSec >= endSec || keptWordsMeta.length > 0 && keptWordsMeta[0].start < lineStartSec) {
-                const startRef = keptWordsMeta.length > 0 ? keptWordsMeta[0].start : Math.max(0, lineStartSec - duration);
-                const hrs = Math.floor(startRef / 3600);
-                const mins = Math.floor((startRef % 3600) / 60);
-                const secs = Math.floor(startRef % 60);
-                newTime = `${hrs.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-             }
              anyChanges = true;
-             return { ...item, text: newText, words: keptWordsMeta.length > 0 ? keptWordsMeta : undefined, time: newTime };
+             return { ...item, text: newText, words: keptWordsMeta.length > 0 ? keptWordsMeta : undefined };
           }
        }
        return item;
@@ -1132,42 +1134,15 @@ export default function TranscriptPage() {
     // Track deleted time range for instant playback skipping & automatic progress bar shading
     deletedTimeRangesRef.current.push({ start: tStart, end: tEnd });
     setDeletedRangesState([...deletedTimeRangesRef.current]);
+    syncWaveformRegions(deletedTimeRangesRef.current);
 
-    // 1. Shift remaining transcript timestamps backwards by cutDuration
-    const updatedTranscript = transcriptData
-      .filter((_, i) => i !== index)
-      .map((item) => {
-        const sec = timeStringToSeconds(item.time);
-        if (sec > tStart) {
-          const newSec = Math.max(0, sec - cutDuration);
-          const hrs = Math.floor(newSec / 3600);
-          const mins = Math.floor((newSec % 3600) / 60);
-          const secs = Math.floor(newSec % 60);
-          const timeStr = `${hrs.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-          
-          const shiftedWords = (item.words || []).map((w: any) => ({
-             ...w,
-             start: Math.max(0, w.start - cutDuration),
-             end: Math.max(0, w.end - cutDuration)
-          }));
-          
-          return { ...item, time: timeStr, words: shiftedWords.length > 0 ? shiftedWords : undefined };
-        }
-        return item;
-      });
+    const updatedTranscript = transcriptData.filter((_, i) => i !== index);
 
     // ⚡ INSTANT UI & UNDO UPDATE (< 1ms)! Zero lag!
     isLocalUpdateRef.current = true;
     setTranscriptData(updatedTranscript);
     pushToHistory(updatedTranscript);
     persistTranscriptToDatabase(updatedTranscript);
-
-    // 2. Perform Instant In-Memory Audio Cut!
-    if (hasRealAudio && audioSrc) {
-      setTimeout(() => {
-        executeAudioCut(tStart, tEnd);
-      }, 10);
-    }
   };
 
   useEffect(() => {
