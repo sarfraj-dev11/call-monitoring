@@ -1060,7 +1060,6 @@ export default function TranscriptPage() {
           anyChanges = true;
           return { ...item, text: newText, words: keptWordsMeta.length > 0 ? keptWordsMeta : undefined, time: newTime };
        }
-       }
        return item;
     }).filter(item => item && item.text && item.text.trim() !== "");
     
