@@ -801,133 +801,15 @@ export default function TranscriptPage() {
   };
 
   const saveEditing = (index: number) => {
-    const oldItem = transcriptData[index];
-    const oldText = oldItem.text || "";
-    const newText = editingText;
+    // Cut according to the audio, not to the transcripts!
+    // Text editing should NEVER trigger an audio cut or shift timestamps.
+    const updatedTranscript = [...transcriptData];
+    updatedTranscript[index] = { ...updatedTranscript[index], text: editingText };
     
-    // DIFFING ALGORITHM for Word-Level Audio Sync (using Longest Common Subsequence)
-    const oldWordsArr = oldText.trim().split(/\s+/).filter(Boolean);
-    const newWordsArr = newText.trim().split(/\s+/).filter(Boolean);
-    const wordsMeta = oldItem.words || [];
-    
-    const m = oldWordsArr.length;
-    const n = newWordsArr.length;
-    const dp = Array(m + 1).fill(0).map(() => Array(n + 1).fill(0));
-    for (let i = 1; i <= m; i++) {
-      for (let j = 1; j <= n; j++) {
-        const cleanOld = oldWordsArr[i - 1].replace(/[.,?!]/g, "").toLowerCase();
-        const cleanNew = newWordsArr[j - 1].replace(/[.,?!]/g, "").toLowerCase();
-        if (cleanOld === cleanNew) {
-          dp[i][j] = dp[i - 1][j - 1] + 1;
-        } else {
-          dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
-        }
-      }
-    }
-    
-    let dpI = m, dpJ = n;
-    const keptOldIndices = new Set<number>();
-    const keptNewIndices = new Set<number>();
-    while (dpI > 0 && dpJ > 0) {
-      const cleanOld = oldWordsArr[dpI - 1].replace(/[.,?!]/g, "").toLowerCase();
-      const cleanNew = newWordsArr[dpJ - 1].replace(/[.,?!]/g, "").toLowerCase();
-      if (cleanOld === cleanNew) {
-        keptOldIndices.add(dpI - 1);
-        keptNewIndices.add(dpJ - 1);
-        dpI--; dpJ--;
-      } else if (dp[dpI - 1][dpJ] > dp[dpI][dpJ - 1]) {
-        dpI--;
-      } else {
-        dpJ--;
-      }
-    }
-
-    let oldIdx = 0;
-    let newIdx = 0;
-    let totalCutDuration = 0;
-    const rangesToCut: Array<{start: number, end: number}> = [];
-    const newWordsMeta: any[] = [];
-    
-    const lineStartSec = timeStringToSeconds(oldItem.time);
-    let lineEndSec = lineStartSec + 5;
-    if (transcriptData[index + 1]) {
-       lineEndSec = timeStringToSeconds(transcriptData[index + 1].time);
-    }
-    const estimatedDurationPerWord = Math.min(0.35, Math.max(0.15, (lineEndSec - lineStartSec) / (oldWordsArr.length || 1)));
-
-    while (oldIdx < oldWordsArr.length || newIdx < newWordsArr.length) {
-       if (oldIdx < oldWordsArr.length && !keptOldIndices.has(oldIdx)) {
-          // This old word was deleted
-          const meta = wordsMeta[oldIdx];
-          if (meta && meta.start !== undefined && meta.end !== undefined) {
-             const cStart = Math.min(lineEndSec, meta.start);
-             const cEnd = Math.min(lineEndSec, meta.end);
-             if (cEnd > cStart) {
-                rangesToCut.push({ start: cStart, end: cEnd });
-                totalCutDuration += (cEnd - cStart);
-             }
-          } else {
-             const estStart = Math.min(lineEndSec, lineStartSec + (oldIdx * estimatedDurationPerWord));
-             const estEnd = Math.min(lineEndSec, estStart + estimatedDurationPerWord);
-             if (estEnd > estStart) {
-                rangesToCut.push({ start: estStart, end: estEnd });
-                totalCutDuration += (estEnd - estStart);
-             }
-          }
-          oldIdx++;
-       } else if (newIdx < newWordsArr.length && !keptNewIndices.has(newIdx)) {
-          // This new word was inserted
-          const prevMeta = newWordsMeta[newWordsMeta.length - 1];
-          const dummyTime = prevMeta ? prevMeta.end : lineStartSec;
-          newWordsMeta.push({ word: newWordsArr[newIdx], start: dummyTime, end: dummyTime });
-          newIdx++;
-       } else {
-          // Both are kept and match
-          const meta = wordsMeta[oldIdx];
-          if (meta && meta.start !== undefined && meta.end !== undefined) {
-             newWordsMeta.push({ ...meta, word: newWordsArr[newIdx], start: Math.max(0, meta.start - totalCutDuration), end: Math.max(0, meta.end - totalCutDuration) });
-          } else {
-             const estStart = lineStartSec + (oldIdx * estimatedDurationPerWord) - totalCutDuration;
-             const estEnd = estStart + estimatedDurationPerWord;
-             newWordsMeta.push({ word: newWordsArr[newIdx], start: Math.max(0, estStart), end: Math.max(0, estEnd) });
-          }
-          oldIdx++;
-          newIdx++;
-       }
-    }
-
-    const updatedTranscript = transcriptData.map((item, i) => {
-      if (i === index) {
-        return { ...item, text: editingText, words: newWordsMeta };
-      }
-      if (i > index && totalCutDuration > 0) {
-        const sec = timeStringToSeconds(item.time);
-        const newSec = Math.max(0, sec - totalCutDuration);
-        const hrs = Math.floor(newSec / 3600);
-        const mins = Math.floor((newSec % 3600) / 60);
-        const secs = Math.floor(newSec % 60);
-        const timeStr = `${hrs.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-        
-        const shiftedWords = (item.words || []).map((w: any) => ({
-           ...w,
-           start: Math.max(0, w.start - totalCutDuration),
-           end: Math.max(0, w.end - totalCutDuration)
-        }));
-        
-        return { ...item, time: timeStr, words: shiftedWords.length > 0 ? shiftedWords : undefined };
-      }
-      return item;
-    });
-
     isLocalUpdateRef.current = true;
     setTranscriptData(updatedTranscript);
     pushToHistory(updatedTranscript);
     persistTranscriptToDatabase(updatedTranscript);
-
-    if (rangesToCut.length > 0) {
-       processAudioCuts(rangesToCut);
-    }
-
     setEditingIndex(null);
     setEditingText("");
   };
