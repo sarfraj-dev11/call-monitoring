@@ -143,8 +143,8 @@ async function prewarmAudioCache(
         const totalSamples = audioBuffer.length;
 
         const cutStartSample = Math.max(0, Math.floor(range.start * sampleRate));
-        const cutEndSample = Math.min(totalSamples, Math.ceil(range.end * sampleRate));
-        const cutSampleLength = cutEndSample - cutStartSample;
+        const cutEndSample = Math.min(totalSamples, Math.floor(range.end * sampleRate));
+        const cutSampleLength = Math.max(0, cutEndSample - cutStartSample);
 
         if (totalSamples - cutSampleLength > 0) {
           const trimmedBuffer = audioCtx.createBuffer(channels, totalSamples - cutSampleLength, sampleRate);
@@ -1133,8 +1133,8 @@ export default function TranscriptPage() {
       const totalSamples = audioBuffer.length;
 
       const cutStartSample = Math.max(0, Math.floor(cutStartSec * sampleRate));
-      const cutEndSample = Math.min(totalSamples, Math.ceil(cutEndSec * sampleRate));
-      const cutSampleLength = cutEndSample - cutStartSample;
+      const cutEndSample = Math.min(totalSamples, Math.floor(cutEndSec * sampleRate));
+      const cutSampleLength = Math.max(0, cutEndSample - cutStartSample);
 
       if (totalSamples - cutSampleLength > 0) {
         const trimmedBuffer = audioCtx.createBuffer(channels, totalSamples - cutSampleLength, sampleRate);
