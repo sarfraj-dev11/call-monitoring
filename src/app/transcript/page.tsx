@@ -349,7 +349,7 @@ export default function TranscriptPage() {
         }
         if (wavesurferRef.current) {
           try {
-            wavesurferRef.current.load(resolvedUrl);
+            Promise.resolve(wavesurferRef.current.load(resolvedUrl)).catch(() => {});
           } catch (e) {}
         }
       }
@@ -386,7 +386,7 @@ export default function TranscriptPage() {
         }
         if (wavesurferRef.current) {
           try {
-            wavesurferRef.current.load(resolvedUrl);
+            Promise.resolve(wavesurferRef.current.load(resolvedUrl)).catch(() => {});
           } catch (e) {}
         }
       }
@@ -590,7 +590,7 @@ export default function TranscriptPage() {
               }
               if (wavesurferRef.current) {
                 try {
-                  wavesurferRef.current.load(trimmedUrl);
+                  Promise.resolve(wavesurferRef.current.load(trimmedUrl)).catch(() => {});
                 } catch (e) {}
               }
             });
@@ -1191,7 +1191,7 @@ export default function TranscriptPage() {
 
         if (wavesurferRef.current) {
           try {
-            wavesurferRef.current.load(trimmedBlobUrl);
+            Promise.resolve(wavesurferRef.current.load(trimmedBlobUrl)).catch(() => {});
           } catch (e) {}
         }
       }
