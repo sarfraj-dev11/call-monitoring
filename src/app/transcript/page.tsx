@@ -979,6 +979,11 @@ export default function TranscriptPage() {
     if (endSec <= startSec) return;
     const duration = endSec - startSec;
 
+    // Track deleted ranges so they persist across page refreshes!
+    const newRanges = [...deletedTimeRangesRef.current, { start: startSec, end: endSec }];
+    deletedTimeRangesRef.current = newRanges;
+    setDeletedRangesState(newRanges);
+
     // 1. Physically splice audio in RAM in < 10ms with instant peak rendering!
     executeAudioCut(startSec, endSec);
     
@@ -1045,12 +1050,11 @@ export default function TranscriptPage() {
        return item;
     }).filter(item => item && item.text && item.text.trim() !== "");
     
-    if (anyChanges) {
-       isLocalUpdateRef.current = true;
-       setTranscriptData(updatedTranscript);
-       pushToHistory(updatedTranscript);
-       persistTranscriptToDatabase(updatedTranscript);
-    }
+    isLocalUpdateRef.current = true;
+    const finalTranscript = anyChanges ? updatedTranscript : transcriptData;
+    setTranscriptData(finalTranscript);
+    pushToHistory(finalTranscript);
+    persistTranscriptToDatabase(finalTranscript);
   };
 
   useEffect(() => {
