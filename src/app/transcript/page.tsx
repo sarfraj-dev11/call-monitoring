@@ -886,7 +886,7 @@ export default function TranscriptPage() {
       barWidth: 2,
       barGap: 1,
       barRadius: 2,
-      minPxPerSec: 100,
+      minPxPerSec: 20,
       hideScrollbar: false,
       autoScroll: true,
       autoCenter: true,
@@ -1426,7 +1426,7 @@ export default function TranscriptPage() {
                         type="range" 
                         min="1" 
                         max="100" 
-                        defaultValue="100"
+                        defaultValue="20"
                         onChange={(e) => {
                           if (wavesurferRef.current) {
                             wavesurferRef.current.zoom(Number(e.target.value));
