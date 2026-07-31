@@ -211,6 +211,7 @@ export default function TranscriptPage() {
   const wsRegionsRef = useRef<any>(null);
 
   // Ref & State for automatic visual timeline progress bar shading
+  const audioSrcRef = useRef<string>("");
   const isLocalUpdateRef = useRef(false);
   const deletedTimeRangesRef = useRef<Array<{ start: number; end: number }>>([]);
   const [deletedRangesState, setDeletedRangesState] = useState<Array<{ start: number; end: number }>>([]);
@@ -562,15 +563,22 @@ export default function TranscriptPage() {
             const fileName = audioFileUrl.replace("/uploads/", "");
             audioFileUrl = `/api/audio?file=${fileName}`;
           }
-          setAudioSrc(audioFileUrl);
+          
+          // Only initialize audioSrc if not already loaded, so Firestore cloud sync never pauses playing audio!
+          if (!audioSrcRef.current) {
+            audioSrcRef.current = audioFileUrl;
+            setAudioSrc(audioFileUrl);
+          }
           setHasRealAudio(true);
 
           // ⚡ Pre-warm audio cache & apply saved cuts on refresh so audio cut persists!
           setTimeout(() => {
             prewarmAudioCache(audioFileUrl!, activeId!, savedRanges, (trimmedUrl) => {
               if (audioRef.current) {
+                const isCurrentlyPlaying = isPlaying || !audioRef.current.paused;
                 audioRef.current.src = trimmedUrl;
                 audioRef.current.load();
+                if (isCurrentlyPlaying) audioRef.current.play().catch(() => {});
               }
               if (wavesurferRef.current) {
                 try {
