@@ -843,31 +843,11 @@ export default function TranscriptPage() {
     setEditingText("");
   };
 
-  // Track the audio URL that WaveSurfer was last initialized with
-  const wavesurferInitUrlRef = useRef<string>("");
-
-  // WaveSurfer Initialization — only create a NEW instance when the call changes,
-  // NOT every time we trim audio (which caused the 2-3s visual "refresh").
+  // WaveSurfer Initialization
   useEffect(() => {
     if (!audioSrc || !hasRealAudio || !waveformContainerRef.current) return;
 
-    // If WaveSurfer is alive and we just cut audio (blob URL changed), update it in-place
-    if (wavesurferRef.current && wavesurferInitUrlRef.current && audioSrc !== wavesurferInitUrlRef.current) {
-      // Only update if the previous URL was also a blob (i.e. we cut, not changed calls)
-      if (wavesurferInitUrlRef.current.startsWith("blob:") || audioSrc.startsWith("blob:")) {
-        // Update the underlying media src in-place — NO destroy/recreate needed!
-        try {
-          const ws = wavesurferRef.current;
-          ws.setMediaElement(audioRef.current!);
-          wavesurferInitUrlRef.current = audioSrc;
-        } catch (e) {
-          // fallthrough to full re-init if setMediaElement fails
-        }
-        return;
-      }
-    }
-
-    // Full initialization for a new call or first load
+    // Destroy existing instance to cleanly render updated waveform graph
     if (wavesurferRef.current) {
       wavesurferRef.current.destroy();
     }
