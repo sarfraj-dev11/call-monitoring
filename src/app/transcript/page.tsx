@@ -298,10 +298,16 @@ export default function TranscriptPage() {
       syncWaveformRegions(restoredRanges);
 
       if (state.audioSrc && state.audioSrc !== audioSrc) {
-        setAudioSrc(state.audioSrc);
         if (audioRef.current) {
+          const wasPlaying = isPlaying || !audioRef.current.paused;
           audioRef.current.src = state.audioSrc;
           audioRef.current.load();
+          if (wasPlaying) audioRef.current.play().catch(() => {});
+        }
+        if (wavesurferRef.current) {
+          try {
+            wavesurferRef.current.load(state.audioSrc);
+          } catch (e) {}
         }
       }
       persistTranscriptToDatabase(state.transcript, state.audioSrc);
@@ -325,10 +331,16 @@ export default function TranscriptPage() {
       syncWaveformRegions(restoredRanges);
 
       if (state.audioSrc && state.audioSrc !== audioSrc) {
-        setAudioSrc(state.audioSrc);
         if (audioRef.current) {
+          const wasPlaying = isPlaying || !audioRef.current.paused;
           audioRef.current.src = state.audioSrc;
           audioRef.current.load();
+          if (wasPlaying) audioRef.current.play().catch(() => {});
+        }
+        if (wavesurferRef.current) {
+          try {
+            wavesurferRef.current.load(state.audioSrc);
+          } catch (e) {}
         }
       }
       persistTranscriptToDatabase(state.transcript, state.audioSrc);
