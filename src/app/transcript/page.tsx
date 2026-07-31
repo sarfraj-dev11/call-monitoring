@@ -1103,18 +1103,8 @@ export default function TranscriptPage() {
     const cutDuration = Math.min(wordDuration, maxGap);
     const tEnd = tStart + cutDuration;
 
-    // Track deleted time range for instant playback skipping & automatic progress bar shading
-    deletedTimeRangesRef.current.push({ start: tStart, end: tEnd });
-    setDeletedRangesState([...deletedTimeRangesRef.current]);
-    syncWaveformRegions(deletedTimeRangesRef.current);
-
-    const updatedTranscript = transcriptData.filter((_, i) => i !== index);
-
-    // ⚡ INSTANT UI & UNDO UPDATE (< 1ms)! Zero lag!
-    isLocalUpdateRef.current = true;
-    setTranscriptData(updatedTranscript);
-    pushToHistory(updatedTranscript);
-    persistTranscriptToDatabase(updatedTranscript);
+    // Use the unified robust waveform region cutter for flawless sync
+    deleteWaveformRegion(tStart, tEnd);
   };
 
   useEffect(() => {
@@ -1196,17 +1186,7 @@ export default function TranscriptPage() {
 
   const handleAudioTimeUpdate = () => {
     if (audioRef.current && hasRealAudio) {
-      const cur = audioRef.current.currentTime;
-      // Skip over any deleted line time ranges instantly with clean margin
-      for (const range of deletedTimeRangesRef.current) {
-        if (cur >= range.start - 0.02 && cur < range.end) {
-          const nextValidTime = range.end + 0.05;
-          audioRef.current.currentTime = nextValidTime;
-          setCurrentTime(nextValidTime);
-          return;
-        }
-      }
-      setCurrentTime(cur);
+      setCurrentTime(audioRef.current.currentTime);
     }
   };
 
