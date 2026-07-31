@@ -855,8 +855,8 @@ export default function TranscriptPage() {
     const ws = WaveSurfer.create({
       container: waveformContainerRef.current,
       media: audioRef.current || undefined,
-      waveColor: '#4ade80',
-      progressColor: '#22c55e',
+      waveColor: '#a7f3d0',
+      progressColor: '#059669',
       cursorColor: '#ef4444',
       height: 200,
       barWidth: 2,
@@ -1407,7 +1407,7 @@ export default function TranscriptPage() {
             <section className={styles.playerCard} style={{ flexDirection: 'column', alignItems: 'stretch', gap: '16px' }}>
               {hasRealAudio && (
                 <div style={{ width: '100%' }}>
-                  <div ref={waveformContainerRef} style={{ width: '100%', background: '#18181b', borderRadius: '8px', overflow: 'hidden' }} />
+                  <div ref={waveformContainerRef} style={{ width: '100%', background: '#faf9f5', border: '1px solid #e6e2dc', borderRadius: '12px', overflow: 'hidden', minHeight: '180px' }} />
                   
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', marginTop: '8px', flexWrap: 'wrap', gap: '10px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
