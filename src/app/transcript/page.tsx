@@ -882,7 +882,6 @@ export default function TranscriptPage() {
 
     wavesurferRef.current = ws;
     wsRegionsRef.current = wsRegions;
-    wavesurferInitUrlRef.current = audioSrc;
 
     return () => {
       wsRegions.destroy();
