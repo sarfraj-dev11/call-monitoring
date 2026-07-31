@@ -196,7 +196,20 @@ export function replacePseudoNamesInText(text: string): string {
 
   let correctedText = text;
 
-  // Replace variants using word boundaries
+  // 1. Normalize company name variations (e.g. "broke society", "ripple society", etc.)
+  const companyPatterns: Array<{ pattern: RegExp; replacement: string }> = [
+    { pattern: /\b(?:broke|brook|brok|broken|boke)\s+society\s*(?:solutions?|solution)?\b/gi, replacement: "Ripple Society Solutions" },
+    { pattern: /\b(?:repple|reple|triple|riple)\s+society\s*(?:solutions?|solution)?\b/gi, replacement: "Ripple Society Solutions" },
+    { pattern: /\b(?:calling|with|at|from)\s+Ripple\b(?!\s+Society)/gi, replacement: "$& Society Solutions" },
+    { pattern: /\bRipple\s+Society\b(?!\s+Solutions)/gi, replacement: "Ripple Society Solutions" },
+    { pattern: /\b(?:broke|brook|brok|broken|boke)\s+society\b/gi, replacement: "Ripple Society Solutions" },
+  ];
+
+  for (const item of companyPatterns) {
+    correctedText = correctedText.replace(item.pattern, item.replacement);
+  }
+
+  // 2. Replace variants using word boundaries
   for (const [officialName, variants] of Object.entries(PSEUDO_NAME_VARIANTS)) {
     for (const variant of variants) {
       // Escape special regex characters in variant
@@ -206,7 +219,7 @@ export function replacePseudoNamesInText(text: string): string {
     }
   }
 
-  // Also fix case variations of official names if transcribed in lowercase or unusual casing
+  // 3. Also fix case variations of official names if transcribed in lowercase or unusual casing
   for (const officialName of OFFICIAL_PSEUDO_NAMES) {
     const escapedName = officialName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const regex = new RegExp(`\\b${escapedName}\\b`, "gi");

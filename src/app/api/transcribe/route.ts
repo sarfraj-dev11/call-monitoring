@@ -331,6 +331,7 @@ export async function POST(request: Request) {
               groqForm.append("response_format", "verbose_json");
               groqForm.append("timestamp_granularities[]", "word");
               groqForm.append("timestamp_granularities[]", "segment");
+              groqForm.append("prompt", "This is a call for Ripple Society Solutions. The agent says: 'Thank you for calling Ripple Society Solutions. My name is Mike Ross.' Please transcribe 'Ripple Society Solutions' accurately.");
 
               const groqRes = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
                 method: "POST",
@@ -357,10 +358,12 @@ export async function POST(request: Request) {
                       ? seg.words 
                       : allWords.filter((w: any) => w.start >= (seg.start - 0.1) && w.start <= (seg.end + 0.1));
                     
+                    const cleanedText = replacePseudoNamesInText((seg.text || "").trim());
+
                     transcriptItems.push({
                       time: timeStr,
                       speaker: currentSpeaker,
-                      text: (seg.text || "").trim(),
+                      text: cleanedText,
                       words: segmentWords.length > 0 ? segmentWords : undefined
                     });
                     currentSpeaker = currentSpeaker === "Agent" ? "Customer" : "Agent";
@@ -377,7 +380,7 @@ export async function POST(request: Request) {
                     transcriptItems.push({
                       time: timeStr,
                       speaker: currentSpeaker,
-                      text: sentence.trim()
+                      text: replacePseudoNamesInText(sentence.trim())
                     });
                     currentSpeaker = currentSpeaker === "Agent" ? "Customer" : "Agent";
                     estSec += 8;
