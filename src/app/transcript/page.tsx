@@ -1030,16 +1030,20 @@ export default function TranscriptPage() {
              const wordCenter = (w.start + w.end) / 2;
              if (wordCenter >= startSec && wordCenter <= endSec) {
                 anyChanges = true;
+             } else if (w.start >= endSec) {
+                keptWordsMeta.push({
+                   ...w,
+                   start: Math.max(0, w.start - duration),
+                   end: Math.max(0, w.end - duration)
+                });
+             } else if (w.start >= startSec) {
+                keptWordsMeta.push({
+                   ...w,
+                   start: Math.max(0, startSec),
+                   end: Math.max(0, startSec + Math.max(0.1, w.end - w.start))
+                });
              } else {
-                if (w.start >= endSec) {
-                   keptWordsMeta.push({
-                      ...w,
-                      start: Math.max(0, w.start - duration),
-                      end: Math.max(0, w.end - duration)
-                   });
-                } else {
-                   keptWordsMeta.push(w);
-                }
+                keptWordsMeta.push(w);
              }
           }
           
