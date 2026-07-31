@@ -1012,11 +1012,12 @@ export default function TranscriptPage() {
        
        if (!wordsMeta || wordsMeta.length === 0) {
           const textWords = (item.text || "").split(/\s+/).filter(Boolean);
-          let nextTime = lineStartSec + 5;
+          let nextTime = lineStartSec + Math.max(3, textWords.length * 0.35);
           if (transcriptData[index + 1]) {
              nextTime = timeStringToSeconds(transcriptData[index + 1].time);
           }
-          const wordLen = Math.max(0.2, (nextTime - lineStartSec) / (textWords.length || 1));
+          const activeSpeechDuration = Math.min(Math.max(1, nextTime - lineStartSec), textWords.length * 0.35);
+          const wordLen = Math.max(0.15, activeSpeechDuration / (textWords.length || 1));
           wordsMeta = textWords.map((word: string, i: number) => ({
              word,
              start: lineStartSec + i * wordLen,
