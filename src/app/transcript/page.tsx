@@ -337,15 +337,19 @@ export default function TranscriptPage() {
       syncWaveformRegions(restoredRanges);
 
       if (state.audioSrc && state.audioSrc !== audioSrc) {
+        const resolvedUrl = (state.audioSrc.startsWith("http") && !state.audioSrc.includes("/api/audio"))
+          ? `/api/audio?url=${encodeURIComponent(state.audioSrc)}`
+          : state.audioSrc;
+
         if (audioRef.current) {
           const wasPlaying = isPlaying || !audioRef.current.paused;
-          audioRef.current.src = state.audioSrc;
+          audioRef.current.src = resolvedUrl;
           audioRef.current.load();
           if (wasPlaying) audioRef.current.play().catch(() => {});
         }
         if (wavesurferRef.current) {
           try {
-            wavesurferRef.current.load(state.audioSrc);
+            wavesurferRef.current.load(resolvedUrl);
           } catch (e) {}
         }
       }
@@ -370,15 +374,19 @@ export default function TranscriptPage() {
       syncWaveformRegions(restoredRanges);
 
       if (state.audioSrc && state.audioSrc !== audioSrc) {
+        const resolvedUrl = (state.audioSrc.startsWith("http") && !state.audioSrc.includes("/api/audio"))
+          ? `/api/audio?url=${encodeURIComponent(state.audioSrc)}`
+          : state.audioSrc;
+
         if (audioRef.current) {
           const wasPlaying = isPlaying || !audioRef.current.paused;
-          audioRef.current.src = state.audioSrc;
+          audioRef.current.src = resolvedUrl;
           audioRef.current.load();
           if (wasPlaying) audioRef.current.play().catch(() => {});
         }
         if (wavesurferRef.current) {
           try {
-            wavesurferRef.current.load(state.audioSrc);
+            wavesurferRef.current.load(resolvedUrl);
           } catch (e) {}
         }
       }
