@@ -117,9 +117,14 @@ let currentAudioCallId: string = "";
 
 
 
-// Pre-warm the audio buffer cache in the background without blocking the UI
-async function prewarmAudioCache(audioUrl: string, callId: string) {
-  if (currentAudioCallId === callId && currentAudioBufferCache) return; // already cached
+// Pre-warm the audio buffer cache in the background and apply any saved cuts on page load
+async function prewarmAudioCache(
+  audioUrl: string,
+  callId: string,
+  savedRanges?: Array<{ start: number; end: number }>,
+  onTrimmedReady?: (trimmedBlobUrl: string) => void
+) {
+  if (currentAudioCallId === callId && currentAudioBufferCache && (!savedRanges || savedRanges.length === 0)) return;
   try {
     const proxyUrl = audioUrl.startsWith("http") && !audioUrl.includes("/api/audio")
       ? `/api/audio?url=${encodeURIComponent(audioUrl)}`
@@ -128,11 +133,44 @@ async function prewarmAudioCache(audioUrl: string, callId: string) {
     const arrayBuffer = await response.arrayBuffer();
     const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
     const audioCtx = new AudioContextClass();
-    currentAudioBufferCache = await audioCtx.decodeAudioData(arrayBuffer);
-    currentAudioCallId = callId;
-    console.log("[Cache] Audio buffer pre-warmed for instant cutting!");
+    let audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+
+    // If there are saved cut ranges from previous sessions, apply them directly to the AudioBuffer!
+    if (savedRanges && savedRanges.length > 0) {
+      for (const range of savedRanges) {
+        const sampleRate = audioBuffer.sampleRate;
+        const channels = audioBuffer.numberOfChannels;
+        const totalSamples = audioBuffer.length;
+
+        const cutStartSample = Math.max(0, Math.floor(range.start * sampleRate));
+        const cutEndSample = Math.min(totalSamples, Math.ceil(range.end * sampleRate));
+        const cutSampleLength = cutEndSample - cutStartSample;
+
+        if (totalSamples - cutSampleLength > 0) {
+          const trimmedBuffer = audioCtx.createBuffer(channels, totalSamples - cutSampleLength, sampleRate);
+          for (let channel = 0; channel < channels; channel++) {
+            const oldData = audioBuffer.getChannelData(channel);
+            const newData = trimmedBuffer.getChannelData(channel);
+            if (cutStartSample > 0) newData.set(oldData.subarray(0, cutStartSample), 0);
+            if (cutEndSample < totalSamples) newData.set(oldData.subarray(cutEndSample, totalSamples), cutStartSample);
+          }
+          audioBuffer = trimmedBuffer;
+        }
+      }
+
+      currentAudioBufferCache = audioBuffer;
+      currentAudioCallId = callId;
+
+      const wavBlob = audioBufferToWavBlob(audioBuffer);
+      const trimmedBlobUrl = URL.createObjectURL(wavBlob);
+      if (onTrimmedReady) onTrimmedReady(trimmedBlobUrl);
+      console.log("[Cache] Restored saved audio cuts on page load/refresh!");
+    } else {
+      currentAudioBufferCache = audioBuffer;
+      currentAudioCallId = callId;
+    }
   } catch (e) {
-    console.warn("[Cache] Pre-warm failed, will decode on first cut", e);
+    console.warn("[Cache] Pre-warm failed", e);
   }
 }
 
@@ -495,27 +533,9 @@ export default function TranscriptPage() {
         setDurationSec(activeCall.durationSec || 105);
 
         let audioFileUrl = activeCall.audioUrl || sessionStorage.getItem("active_audio_blob_url");
-        if (audioFileUrl) {
-          if (audioFileUrl.startsWith("/uploads/")) {
-            const fileName = audioFileUrl.replace("/uploads/", "");
-            audioFileUrl = `/api/audio?file=${fileName}`;
-          }
-          setAudioSrc(audioFileUrl);
-          setHasRealAudio(true);
-          // ⚡ Pre-warm the AudioBuffer cache RIGHT NOW, in the background
-          // so that the very first cut the user makes is instant with zero lag!
-          setTimeout(() => prewarmAudioCache(audioFileUrl!, activeId!), 500);
-        } else {
-          setAudioSrc("");
-          setHasRealAudio(false);
-        }
+        let savedRanges: Array<{ start: number; end: number }> = Array.isArray(activeCall.deletedRanges) ? activeCall.deletedRanges : [];
 
-        if (Array.isArray(activeCall.deletedRanges)) {
-          deletedTimeRangesRef.current = activeCall.deletedRanges;
-          setDeletedRangesState([...activeCall.deletedRanges]);
-        }
-
-        // Restore history stack from localStorage if available after page refresh
+        // Restore history stack & ranges from localStorage if available after page refresh
         const savedHistoryStr = localStorage.getItem(`history_stack_${activeId}`);
         if (savedHistoryStr) {
           try {
@@ -526,6 +546,7 @@ export default function TranscriptPage() {
               if (Array.isArray(savedHist.ranges)) {
                 deletedTimeRangesRef.current = savedHist.ranges;
                 setDeletedRangesState([...savedHist.ranges]);
+                if (savedHist.ranges.length > 0) savedRanges = savedHist.ranges;
               }
               updateUndoRedoState();
             }
@@ -534,6 +555,33 @@ export default function TranscriptPage() {
           historyStackRef.current = [{ transcript: JSON.parse(JSON.stringify(initialTranscript)), audioSrc: audioFileUrl || "" }];
           historyIndexRef.current = 0;
           updateUndoRedoState();
+        }
+
+        if (audioFileUrl) {
+          if (audioFileUrl.startsWith("/uploads/")) {
+            const fileName = audioFileUrl.replace("/uploads/", "");
+            audioFileUrl = `/api/audio?file=${fileName}`;
+          }
+          setAudioSrc(audioFileUrl);
+          setHasRealAudio(true);
+
+          // ⚡ Pre-warm audio cache & apply saved cuts on refresh so audio cut persists!
+          setTimeout(() => {
+            prewarmAudioCache(audioFileUrl!, activeId!, savedRanges, (trimmedUrl) => {
+              if (audioRef.current) {
+                audioRef.current.src = trimmedUrl;
+                audioRef.current.load();
+              }
+              if (wavesurferRef.current) {
+                try {
+                  wavesurferRef.current.load(trimmedUrl);
+                } catch (e) {}
+              }
+            });
+          }, 300);
+        } else {
+          setAudioSrc("");
+          setHasRealAudio(false);
         }
       }
     }, (err) => {
