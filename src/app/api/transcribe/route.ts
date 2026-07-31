@@ -329,6 +329,8 @@ export async function POST(request: Request) {
               groqForm.append("file", fileBlob, reqFileName);
               groqForm.append("model", "whisper-large-v3");
               groqForm.append("response_format", "verbose_json");
+              groqForm.append("timestamp_granularities[]", "word");
+              groqForm.append("timestamp_granularities[]", "segment");
 
               const groqRes = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
                 method: "POST",
@@ -339,6 +341,7 @@ export async function POST(request: Request) {
               if (groqRes.ok) {
                 const groqData = await groqRes.json();
                 const segments = groqData.segments || [];
+                const allWords = groqData.words || [];
                 let transcriptItems: any[] = [];
                 let currentSpeaker = "Agent";
 
@@ -349,10 +352,16 @@ export async function POST(request: Request) {
                     const mins = Math.floor((secs % 3600) / 60);
                     const remainingSecs = secs % 60;
                     const timeStr = `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(remainingSecs).padStart(2, '0')}`;
+                    
+                    const segmentWords = (seg.words && seg.words.length > 0) 
+                      ? seg.words 
+                      : allWords.filter((w: any) => w.start >= (seg.start - 0.1) && w.start <= (seg.end + 0.1));
+                    
                     transcriptItems.push({
                       time: timeStr,
                       speaker: currentSpeaker,
-                      text: (seg.text || "").trim()
+                      text: (seg.text || "").trim(),
+                      words: segmentWords.length > 0 ? segmentWords : undefined
                     });
                     currentSpeaker = currentSpeaker === "Agent" ? "Customer" : "Agent";
                   }
@@ -620,6 +629,8 @@ Return ONLY a single valid JSON object with this EXACT structure:
           groqForm.append("file", fileBlob, file.name || "audio.mp3");
           groqForm.append("model", "whisper-large-v3");
           groqForm.append("response_format", "verbose_json");
+          groqForm.append("timestamp_granularities[]", "word");
+          groqForm.append("timestamp_granularities[]", "segment");
 
           const groqRes = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
             method: "POST",
@@ -630,6 +641,7 @@ Return ONLY a single valid JSON object with this EXACT structure:
           if (groqRes.ok) {
             const groqData = await groqRes.json();
             const segments = groqData.segments || [];
+            const allWords = groqData.words || [];
             let transcriptItems: any[] = [];
             let currentSpeaker = "Agent";
 
@@ -640,10 +652,16 @@ Return ONLY a single valid JSON object with this EXACT structure:
                 const mins = Math.floor((secs % 3600) / 60);
                 const remainingSecs = secs % 60;
                 const timeStr = `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(remainingSecs).padStart(2, '0')}`;
+                
+                const segmentWords = (seg.words && seg.words.length > 0) 
+                  ? seg.words 
+                  : allWords.filter((w: any) => w.start >= (seg.start - 0.1) && w.start <= (seg.end + 0.1));
+
                 transcriptItems.push({
                   time: timeStr,
                   speaker: currentSpeaker,
-                  text: (seg.text || "").trim()
+                  text: (seg.text || "").trim(),
+                  words: segmentWords.length > 0 ? segmentWords : undefined
                 });
                 currentSpeaker = currentSpeaker === "Agent" ? "Customer" : "Agent";
               }

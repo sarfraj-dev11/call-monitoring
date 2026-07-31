@@ -618,16 +618,196 @@ export default function TranscriptPage() {
     setEditingText("");
   };
 
+  const processAudioCuts = async (rangesToCut: Array<{start: number, end: number}>) => {
+    rangesToCut.sort((a, b) => b.start - a.start);
+    deletedTimeRangesRef.current.push(...rangesToCut);
+    setDeletedRangesState([...deletedTimeRangesRef.current]);
+
+    if (hasRealAudio && audioSrc) {
+      setTimeout(async () => {
+        try {
+          const proxyUrl = audioSrc.startsWith("http") && !audioSrc.includes("/api/audio")
+            ? `/api/audio?url=${encodeURIComponent(audioSrc)}`
+            : audioSrc;
+          const response = await fetch(proxyUrl);
+          const arrayBuffer = await response.arrayBuffer();
+          const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+          const audioCtx = new AudioContextClass();
+          let currentBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+
+          for (const range of rangesToCut) {
+             const sampleRate = currentBuffer.sampleRate;
+             const channels = currentBuffer.numberOfChannels;
+             const totalSamples = currentBuffer.length;
+             
+             const cutStartSample = Math.max(0, Math.floor(range.start * sampleRate));
+             const cutEndSample = Math.min(totalSamples, Math.ceil(range.end * sampleRate));
+             const cutSampleLength = cutEndSample - cutStartSample;
+             
+             if (totalSamples - cutSampleLength > 0) {
+                const newBuffer = audioCtx.createBuffer(channels, totalSamples - cutSampleLength, sampleRate);
+                for (let ch = 0; ch < channels; ch++) {
+                   const oldData = currentBuffer.getChannelData(ch);
+                   const newData = newBuffer.getChannelData(ch);
+                   if (cutStartSample > 0) newData.set(oldData.subarray(0, cutStartSample), 0);
+                   if (cutEndSample < totalSamples) newData.set(oldData.subarray(cutEndSample, totalSamples), cutStartSample);
+                }
+                currentBuffer = newBuffer;
+             }
+          }
+
+          const wavBlob = audioBufferToWavBlob(currentBuffer);
+          const trimmedBlobUrl = URL.createObjectURL(wavBlob);
+
+          setAudioSrc(trimmedBlobUrl);
+          setHasBeenTrimmed(true);
+          setDurationSec(Math.round(currentBuffer.duration));
+
+          // Ensure history stack perfectly tracks the physically cut blob for Redo operations
+          const currentStack = historyStackRef.current;
+          if (currentStack.length > 0) {
+            currentStack[historyIndexRef.current].audioSrc = trimmedBlobUrl;
+            saveHistoryToStorage(activeCallId, currentStack, historyIndexRef.current, deletedTimeRangesRef.current);
+          }
+
+          if (audioRef.current) {
+            const wasPlaying = isPlaying || !audioRef.current.paused;
+            audioRef.current.src = trimmedBlobUrl;
+            audioRef.current.load();
+            const earliestCut = rangesToCut[rangesToCut.length - 1].start;
+            audioRef.current.currentTime = Math.max(0, Math.min(currentBuffer.duration, earliestCut));
+            if (wasPlaying) {
+              audioRef.current.play().catch(() => {});
+            }
+          }
+        } catch (audioErr) {
+          console.warn("Background audio trimming handled asynchronously:", audioErr);
+        }
+      }, 10);
+    }
+  };
+
   const saveEditing = (index: number) => {
-    const updatedTranscript = [...transcriptData];
-    updatedTranscript[index] = {
-      ...updatedTranscript[index],
-      text: editingText
-    };
+    const oldItem = transcriptData[index];
+    const oldText = oldItem.text || "";
+    const newText = editingText;
+    
+    // DIFFING ALGORITHM for Word-Level Audio Sync (using Longest Common Subsequence)
+    const oldWordsArr = oldText.trim().split(/\s+/).filter(Boolean);
+    const newWordsArr = newText.trim().split(/\s+/).filter(Boolean);
+    const wordsMeta = oldItem.words || [];
+    
+    const m = oldWordsArr.length;
+    const n = newWordsArr.length;
+    const dp = Array(m + 1).fill(0).map(() => Array(n + 1).fill(0));
+    for (let i = 1; i <= m; i++) {
+      for (let j = 1; j <= n; j++) {
+        const cleanOld = oldWordsArr[i - 1].replace(/[.,?!]/g, "").toLowerCase();
+        const cleanNew = newWordsArr[j - 1].replace(/[.,?!]/g, "").toLowerCase();
+        if (cleanOld === cleanNew) {
+          dp[i][j] = dp[i - 1][j - 1] + 1;
+        } else {
+          dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+        }
+      }
+    }
+    
+    let dpI = m, dpJ = n;
+    const keptOldIndices = new Set<number>();
+    const keptNewIndices = new Set<number>();
+    while (dpI > 0 && dpJ > 0) {
+      const cleanOld = oldWordsArr[dpI - 1].replace(/[.,?!]/g, "").toLowerCase();
+      const cleanNew = newWordsArr[dpJ - 1].replace(/[.,?!]/g, "").toLowerCase();
+      if (cleanOld === cleanNew) {
+        keptOldIndices.add(dpI - 1);
+        keptNewIndices.add(dpJ - 1);
+        dpI--; dpJ--;
+      } else if (dp[dpI - 1][dpJ] > dp[dpI][dpJ - 1]) {
+        dpI--;
+      } else {
+        dpJ--;
+      }
+    }
+
+    let oldIdx = 0;
+    let newIdx = 0;
+    let totalCutDuration = 0;
+    const rangesToCut: Array<{start: number, end: number}> = [];
+    const newWordsMeta: any[] = [];
+    
+    const lineStartSec = timeStringToSeconds(oldItem.time);
+    let lineEndSec = lineStartSec + 5;
+    if (transcriptData[index + 1]) {
+       lineEndSec = timeStringToSeconds(transcriptData[index + 1].time);
+    }
+    const estimatedDurationPerWord = Math.max(0.2, (lineEndSec - lineStartSec) / (oldWordsArr.length || 1));
+
+    while (oldIdx < oldWordsArr.length || newIdx < newWordsArr.length) {
+       if (oldIdx < oldWordsArr.length && !keptOldIndices.has(oldIdx)) {
+          // This old word was deleted
+          const meta = wordsMeta[oldIdx];
+          if (meta && meta.start !== undefined && meta.end !== undefined) {
+             rangesToCut.push({ start: meta.start, end: meta.end });
+             totalCutDuration += (meta.end - meta.start);
+          } else {
+             const estStart = lineStartSec + (oldIdx * estimatedDurationPerWord);
+             const estEnd = estStart + estimatedDurationPerWord;
+             rangesToCut.push({ start: estStart, end: estEnd });
+             totalCutDuration += estimatedDurationPerWord;
+          }
+          oldIdx++;
+       } else if (newIdx < newWordsArr.length && !keptNewIndices.has(newIdx)) {
+          // This new word was inserted
+          const prevMeta = newWordsMeta[newWordsMeta.length - 1];
+          const dummyTime = prevMeta ? prevMeta.end : lineStartSec;
+          newWordsMeta.push({ word: newWordsArr[newIdx], start: dummyTime, end: dummyTime });
+          newIdx++;
+       } else {
+          // Both are kept and match
+          const meta = wordsMeta[oldIdx];
+          if (meta && meta.start !== undefined && meta.end !== undefined) {
+             newWordsMeta.push({ ...meta, word: newWordsArr[newIdx], start: Math.max(0, meta.start - totalCutDuration), end: Math.max(0, meta.end - totalCutDuration) });
+          } else {
+             const estStart = lineStartSec + (oldIdx * estimatedDurationPerWord) - totalCutDuration;
+             const estEnd = estStart + estimatedDurationPerWord;
+             newWordsMeta.push({ word: newWordsArr[newIdx], start: Math.max(0, estStart), end: Math.max(0, estEnd) });
+          }
+          oldIdx++;
+          newIdx++;
+       }
+    }
+
+    const updatedTranscript = transcriptData.map((item, i) => {
+      if (i === index) {
+        return { ...item, text: editingText, words: newWordsMeta };
+      }
+      if (i > index && totalCutDuration > 0) {
+        const sec = timeStringToSeconds(item.time);
+        const newSec = Math.max(0, sec - totalCutDuration);
+        const hrs = Math.floor(newSec / 3600);
+        const mins = Math.floor((newSec % 3600) / 60);
+        const secs = Math.floor(newSec % 60);
+        const timeStr = `${hrs.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+        
+        const shiftedWords = (item.words || []).map((w: any) => ({
+           ...w,
+           start: Math.max(0, w.start - totalCutDuration),
+           end: Math.max(0, w.end - totalCutDuration)
+        }));
+        
+        return { ...item, time: timeStr, words: shiftedWords.length > 0 ? shiftedWords : undefined };
+      }
+      return item;
+    });
+
     isLocalUpdateRef.current = true;
     setTranscriptData(updatedTranscript);
     pushToHistory(updatedTranscript);
     persistTranscriptToDatabase(updatedTranscript);
+
+    if (rangesToCut.length > 0) {
+       processAudioCuts(rangesToCut);
+    }
 
     setEditingIndex(null);
     setEditingText("");
@@ -670,7 +850,14 @@ export default function TranscriptPage() {
           const mins = Math.floor((newSec % 3600) / 60);
           const secs = Math.floor(newSec % 60);
           const timeStr = `${hrs.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-          return { ...item, time: timeStr };
+          
+          const shiftedWords = (item.words || []).map((w: any) => ({
+             ...w,
+             start: Math.max(0, w.start - cutDuration),
+             end: Math.max(0, w.end - cutDuration)
+          }));
+          
+          return { ...item, time: timeStr, words: shiftedWords.length > 0 ? shiftedWords : undefined };
         }
         return item;
       });
