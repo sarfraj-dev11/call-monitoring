@@ -112,10 +112,9 @@ function audioBufferToWavBlob(buffer: AudioBuffer): Blob {
   return new Blob([header, pcmData], { type: 'audio/wav' });
 }
 // Global Audio Cache for Instant Splicing
+let originalAudioBufferCache: AudioBuffer | null = null;
 let currentAudioBufferCache: AudioBuffer | null = null;
 let currentAudioCallId: string = "";
-
-
 
 // Pre-warm the audio buffer cache in the background and apply any saved cuts on page load
 async function prewarmAudioCache(
@@ -124,18 +123,28 @@ async function prewarmAudioCache(
   savedRanges?: Array<{ start: number; end: number }>,
   onTrimmedReady?: (trimmedBlobUrl: string) => void
 ) {
-  if (currentAudioCallId === callId && currentAudioBufferCache && (!savedRanges || savedRanges.length === 0)) return;
   try {
-    const proxyUrl = audioUrl.startsWith("http") && !audioUrl.includes("/api/audio")
-      ? `/api/audio?url=${encodeURIComponent(audioUrl)}`
-      : audioUrl;
-    const response = await fetch(proxyUrl);
-    const arrayBuffer = await response.arrayBuffer();
     const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
     const audioCtx = new AudioContextClass();
-    let audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+    
+    let audioBuffer = originalAudioBufferCache;
 
-    // If there are saved cut ranges from previous sessions, apply them directly to the AudioBuffer!
+    // Fetch and decode ONLY if not already cached
+    if (currentAudioCallId !== callId || !audioBuffer) {
+      const proxyUrl = audioUrl.startsWith("http") && !audioUrl.includes("/api/audio")
+        ? `/api/audio?url=${encodeURIComponent(audioUrl)}`
+        : audioUrl;
+      const response = await fetch(proxyUrl);
+      const arrayBuffer = await response.arrayBuffer();
+      audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+      
+      originalAudioBufferCache = audioBuffer;
+      currentAudioCallId = callId;
+    }
+
+    if (!audioBuffer) return;
+
+    // If there are saved cut ranges, apply them sequentially to reconstruct the exact timeline state!
     if (savedRanges && savedRanges.length > 0) {
       for (const range of savedRanges) {
         const sampleRate = audioBuffer.sampleRate;
@@ -157,20 +166,26 @@ async function prewarmAudioCache(
           audioBuffer = trimmedBuffer;
         }
       }
+    }
 
-      currentAudioBufferCache = audioBuffer;
-      currentAudioCallId = callId;
+    currentAudioBufferCache = audioBuffer;
 
+    if (savedRanges && savedRanges.length > 0) {
       const wavBlob = audioBufferToWavBlob(audioBuffer);
       const trimmedBlobUrl = URL.createObjectURL(wavBlob);
       if (onTrimmedReady) onTrimmedReady(trimmedBlobUrl);
-      console.log("[Cache] Restored saved audio cuts on page load/refresh!");
+      console.log("[Cache] Restored audio cuts instantly from RAM!");
     } else {
-      currentAudioBufferCache = audioBuffer;
-      currentAudioCallId = callId;
+      // If no cuts, restore original Blob URL directly
+      if (onTrimmedReady) {
+        // Generate Blob for the original buffer if undoing back to 0 cuts
+        const wavBlob = audioBufferToWavBlob(audioBuffer);
+        const url = URL.createObjectURL(wavBlob);
+        onTrimmedReady(url);
+      }
     }
   } catch (e) {
-    console.warn("[Cache] Pre-warm failed", e);
+    console.warn("[Cache] Audio restoration failed", e);
   }
 }
 
@@ -336,23 +351,20 @@ export default function TranscriptPage() {
       setDeletedRangesState(restoredRanges);
       syncWaveformRegions(restoredRanges);
 
-      if (state.audioSrc && state.audioSrc !== audioSrc) {
-        const resolvedUrl = (state.audioSrc.startsWith("http") && !state.audioSrc.includes("/api/audio"))
-          ? `/api/audio?url=${encodeURIComponent(state.audioSrc)}`
-          : state.audioSrc;
-
+      // Instantly physically reconstruct the exact audio buffer timeline for this undo state!
+      prewarmAudioCache(state.audioSrc || audioSrc, activeCallId, restoredRanges, (blobUrl) => {
         if (audioRef.current) {
           const wasPlaying = isPlaying || !audioRef.current.paused;
-          audioRef.current.src = resolvedUrl;
+          audioRef.current.src = blobUrl;
           audioRef.current.load();
           if (wasPlaying) audioRef.current.play().catch(() => {});
         }
         if (wavesurferRef.current) {
           try {
-            Promise.resolve(wavesurferRef.current.load(resolvedUrl)).catch(() => {});
+            Promise.resolve(wavesurferRef.current.load(blobUrl)).catch(() => {});
           } catch (e) {}
         }
-      }
+      });
       persistTranscriptToDatabase(state.transcript, state.audioSrc);
       updateUndoRedoState();
       saveHistoryToStorage(activeCallId, historyStackRef.current, historyIndexRef.current, restoredRanges);
@@ -373,23 +385,20 @@ export default function TranscriptPage() {
       setDeletedRangesState(restoredRanges);
       syncWaveformRegions(restoredRanges);
 
-      if (state.audioSrc && state.audioSrc !== audioSrc) {
-        const resolvedUrl = (state.audioSrc.startsWith("http") && !state.audioSrc.includes("/api/audio"))
-          ? `/api/audio?url=${encodeURIComponent(state.audioSrc)}`
-          : state.audioSrc;
-
+      // Instantly physically reconstruct the exact audio buffer timeline for this redo state!
+      prewarmAudioCache(state.audioSrc || audioSrc, activeCallId, restoredRanges, (blobUrl) => {
         if (audioRef.current) {
           const wasPlaying = isPlaying || !audioRef.current.paused;
-          audioRef.current.src = resolvedUrl;
+          audioRef.current.src = blobUrl;
           audioRef.current.load();
           if (wasPlaying) audioRef.current.play().catch(() => {});
         }
         if (wavesurferRef.current) {
           try {
-            Promise.resolve(wavesurferRef.current.load(resolvedUrl)).catch(() => {});
+            Promise.resolve(wavesurferRef.current.load(blobUrl)).catch(() => {});
           } catch (e) {}
         }
-      }
+      });
       persistTranscriptToDatabase(state.transcript, state.audioSrc);
       updateUndoRedoState();
       saveHistoryToStorage(activeCallId, historyStackRef.current, historyIndexRef.current, restoredRanges);
