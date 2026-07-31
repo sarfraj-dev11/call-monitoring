@@ -196,13 +196,12 @@ export function replacePseudoNamesInText(text: string): string {
 
   let correctedText = text;
 
-  // 1. Normalize company name variations (e.g. "broke society", "ripple society", etc.)
+  // 1. Normalize company name variations to official "Brocus IT Solutions"
   const companyPatterns: Array<{ pattern: RegExp; replacement: string }> = [
-    { pattern: /\b(?:broke|brook|brok|broken|boke)\s+society\s*(?:solutions?|solution)?\b/gi, replacement: "Ripple Society Solutions" },
-    { pattern: /\b(?:repple|reple|triple|riple)\s+society\s*(?:solutions?|solution)?\b/gi, replacement: "Ripple Society Solutions" },
-    { pattern: /\b(?:calling|with|at|from)\s+Ripple\b(?!\s+Society)/gi, replacement: "$& Society Solutions" },
-    { pattern: /\bRipple\s+Society\b(?!\s+Solutions)/gi, replacement: "Ripple Society Solutions" },
-    { pattern: /\b(?:broke|brook|brok|broken|boke)\s+society\b/gi, replacement: "Ripple Society Solutions" },
+    { pattern: /\b(?:brorker|broker|brok|brook|broken|boke)\s+(?:cite|site|city|society|secutity)\s*(?:solutions?|solution)?\b/gi, replacement: "Brocus IT Solutions" },
+    { pattern: /\b(?:repple|reple|triple|riple|ripple)\s*(?:society)?\s*(?:solutions?|solution)?\b/gi, replacement: "Brocus IT Solutions" },
+    { pattern: /\b(?:brocus|brokus|brocas|brokuss|broker)\s+(?:IT|it)\s*(?:solutions?|solution)?\b/gi, replacement: "Brocus IT Solutions" },
+    { pattern: /\b(?:brocus|brokus|brocas)\s*(?:solutions?|solution)?\b/gi, replacement: "Brocus IT Solutions" },
   ];
 
   for (const item of companyPatterns) {

@@ -331,7 +331,7 @@ export async function POST(request: Request) {
               groqForm.append("response_format", "verbose_json");
               groqForm.append("timestamp_granularities[]", "word");
               groqForm.append("timestamp_granularities[]", "segment");
-              groqForm.append("prompt", "This is a call for Ripple Society Solutions. The agent says: 'Thank you for calling Ripple Society Solutions. My name is Mike Ross.' Please transcribe 'Ripple Society Solutions' accurately.");
+              groqForm.append("prompt", "This is a customer service call for Brocus IT Solutions. The agent introduces the company as Brocus IT Solutions. Please transcribe 'Brocus IT Solutions' accurately.");
 
               const groqRes = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
                 method: "POST",
