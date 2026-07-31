@@ -120,6 +120,25 @@ function audioBufferToWavBlob(buffer: AudioBuffer): Blob {
 let currentAudioBufferCache: AudioBuffer | null = null;
 let currentAudioCallId: string = "";
 
+// Pre-warm the audio buffer cache in the background without blocking the UI
+async function prewarmAudioCache(audioUrl: string, callId: string) {
+  if (currentAudioCallId === callId && currentAudioBufferCache) return; // already cached
+  try {
+    const proxyUrl = audioUrl.startsWith("http") && !audioUrl.includes("/api/audio")
+      ? `/api/audio?url=${encodeURIComponent(audioUrl)}`
+      : audioUrl;
+    const response = await fetch(proxyUrl);
+    const arrayBuffer = await response.arrayBuffer();
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    const audioCtx = new AudioContextClass();
+    currentAudioBufferCache = await audioCtx.decodeAudioData(arrayBuffer);
+    currentAudioCallId = callId;
+    console.log("[Cache] Audio buffer pre-warmed for instant cutting!");
+  } catch (e) {
+    console.warn("[Cache] Pre-warm failed, will decode on first cut", e);
+  }
+}
+
 export default function TranscriptPage() {
   const router = useRouter();
   const [isEvaluating, setIsEvaluating] = useState(false);
@@ -464,6 +483,9 @@ export default function TranscriptPage() {
           }
           setAudioSrc(audioFileUrl);
           setHasRealAudio(true);
+          // ⚡ Pre-warm the AudioBuffer cache RIGHT NOW, in the background
+          // so that the very first cut the user makes is instant with zero lag!
+          setTimeout(() => prewarmAudioCache(audioFileUrl!, activeId!), 500);
         } else {
           setAudioSrc("");
           setHasRealAudio(false);
@@ -821,10 +843,31 @@ export default function TranscriptPage() {
     setEditingText("");
   };
 
-  // WaveSurfer Initialization
+  // Track the audio URL that WaveSurfer was last initialized with
+  const wavesurferInitUrlRef = useRef<string>("");
+
+  // WaveSurfer Initialization — only create a NEW instance when the call changes,
+  // NOT every time we trim audio (which caused the 2-3s visual "refresh").
   useEffect(() => {
     if (!audioSrc || !hasRealAudio || !waveformContainerRef.current) return;
 
+    // If WaveSurfer is alive and we just cut audio (blob URL changed), update it in-place
+    if (wavesurferRef.current && wavesurferInitUrlRef.current && audioSrc !== wavesurferInitUrlRef.current) {
+      // Only update if the previous URL was also a blob (i.e. we cut, not changed calls)
+      if (wavesurferInitUrlRef.current.startsWith("blob:") || audioSrc.startsWith("blob:")) {
+        // Update the underlying media src in-place — NO destroy/recreate needed!
+        try {
+          const ws = wavesurferRef.current;
+          ws.setMediaElement(audioRef.current!);
+          wavesurferInitUrlRef.current = audioSrc;
+        } catch (e) {
+          // fallthrough to full re-init if setMediaElement fails
+        }
+        return;
+      }
+    }
+
+    // Full initialization for a new call or first load
     if (wavesurferRef.current) {
       wavesurferRef.current.destroy();
     }
@@ -839,8 +882,8 @@ export default function TranscriptPage() {
       barWidth: 2,
       barGap: 1,
       barRadius: 2,
-      minPxPerSec: 100, // Automatically enables horizontal scrolling by stretching the waveform
-      hideScrollbar: false, // Ensures the browser scrollbar is visible
+      minPxPerSec: 100,
+      hideScrollbar: false,
       autoScroll: true,
       autoCenter: true,
     });
@@ -859,6 +902,7 @@ export default function TranscriptPage() {
 
     wavesurferRef.current = ws;
     wsRegionsRef.current = wsRegions;
+    wavesurferInitUrlRef.current = audioSrc;
 
     return () => {
       wsRegions.destroy();
@@ -960,6 +1004,20 @@ export default function TranscriptPage() {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+
+      // Ctrl+Z = Undo
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+        return;
+      }
+
+      // Ctrl+Y or Ctrl+Shift+Z = Redo
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+        e.preventDefault();
+        handleRedo();
+        return;
+      }
 
       if ((e.key === "Backspace" || e.key === "Delete") && wsRegionsRef.current) {
         const regions = wsRegionsRef.current.getRegions();
