@@ -1496,7 +1496,9 @@ export default function TranscriptPage() {
                         defaultValue="20"
                         onChange={(e) => {
                           if (wavesurferRef.current) {
-                            wavesurferRef.current.zoom(Number(e.target.value));
+                            try {
+                              wavesurferRef.current.zoom(Number(e.target.value));
+                            } catch (err) {}
                           }
                         }}
                         className={styles.zoomSlider}
