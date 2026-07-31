@@ -74,29 +74,80 @@
 }
 
 .playButton {
-  background-color: #2b2825;
-  color: #ffffff;
-  width: 44px;
-  height: 44px;
+  background: linear-gradient(135deg, #18181b 0%, #27272a 100%);
+  color: #10b981;
+  width: 48px;
+  height: 48px;
   border-radius: 50%;
-  border: none;
+  border: 1px solid #3f3f46;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.1);
   flex-shrink: 0;
 }
 
 .playButton:hover {
-  background-color: var(--color-accent);
-  transform: scale(1.05);
+  transform: scale(1.08) translateY(-2px);
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: #ffffff;
+  border-color: #059669;
+  box-shadow: 0 8px 24px rgba(16, 185, 129, 0.4);
 }
 
 .playButton svg {
+  width: 20px;
+  height: 20px;
+  margin-left: 2px;
+}
+
+.skipButton {
+  background: #f4f4f5;
+  color: #52525b;
+  border: 1px solid #e4e4e7;
+  padding: 8px 14px;
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+}
+
+.skipButton:hover {
+  background: #ffffff;
+  color: #10b981;
+  border-color: #10b981;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.15);
+}
+
+.zoomSlider {
+  -webkit-appearance: none;
+  width: 120px;
+  height: 6px;
+  background: #e4e4e7;
+  border-radius: 4px;
+  outline: none;
+  transition: all 0.2s;
+  cursor: pointer;
+}
+.zoomSlider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
   width: 16px;
   height: 16px;
-  margin-left: 2px;
+  border-radius: 50%;
+  background: #10b981;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(16, 185, 129, 0.4);
+  transition: transform 0.2s;
+}
+.zoomSlider::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+  background: #059669;
 }
 
 .progressBarContainer {

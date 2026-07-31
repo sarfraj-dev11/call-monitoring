@@ -12,10 +12,47 @@ export async function GET(request: Request) {
       try {
         const remoteRes = await fetch(remoteUrl);
         const audioBuffer = await remoteRes.arrayBuffer();
+        const fileSize = audioBuffer.byteLength;
+        const range = request.headers.get("range");
+        const contentType = remoteRes.headers.get("content-type") || "audio/mpeg";
+
+        if (range) {
+          const parts = range.replace(/bytes=/, "").split("-");
+          const start = parseInt(parts[0], 10);
+          const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+
+          if (start >= fileSize || end >= fileSize) {
+            return new NextResponse(null, {
+              status: 416,
+              headers: {
+                "Content-Range": `bytes */${fileSize}`,
+                "Access-Control-Allow-Origin": "*",
+              },
+            });
+          }
+
+          const chunksize = end - start + 1;
+          const chunk = audioBuffer.slice(start, end + 1);
+
+          return new NextResponse(chunk, {
+            status: 206,
+            headers: {
+              "Content-Range": `bytes ${start}-${end}/${fileSize}`,
+              "Accept-Ranges": "bytes",
+              "Content-Length": chunksize.toString(),
+              "Content-Type": contentType,
+              "Access-Control-Allow-Origin": "*",
+              "Cache-Control": "no-cache",
+            },
+          });
+        }
+
         return new NextResponse(audioBuffer, {
           status: 200,
           headers: {
-            "Content-Type": remoteRes.headers.get("content-type") || "audio/mpeg",
+            "Content-Type": contentType,
+            "Content-Length": fileSize.toString(),
+            "Accept-Ranges": "bytes",
             "Access-Control-Allow-Origin": "*",
             "Cache-Control": "no-cache",
           }

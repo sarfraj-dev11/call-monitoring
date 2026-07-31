@@ -7,6 +7,8 @@ import { useRouter } from "next/navigation";
 import { Pencil, Trash2 } from "lucide-react";
 import { db } from "@/lib/firebase";
 import { doc, updateDoc, onSnapshot, collection } from "firebase/firestore";
+import WaveSurfer from 'wavesurfer.js';
+import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.esm.js';
 
 // SVG Icons
 const PlayIcon = () => (
@@ -114,6 +116,9 @@ function audioBufferToWavBlob(buffer: AudioBuffer): Blob {
 
   return new Blob([out], { type: 'audio/wav' });
 }
+// Global Audio Cache for Instant Splicing
+let currentAudioBufferCache: AudioBuffer | null = null;
+let currentAudioCallId: string = "";
 
 export default function TranscriptPage() {
   const router = useRouter();
@@ -147,6 +152,9 @@ export default function TranscriptPage() {
   const audioRef = useRef<HTMLAudioElement>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
   const activeRowRef = useRef<HTMLDivElement>(null);
+  const waveformContainerRef = useRef<HTMLDivElement>(null);
+  const wavesurferRef = useRef<any>(null);
+  const wsRegionsRef = useRef<any>(null);
 
   // Ref & State for automatic visual timeline progress bar shading
   const isLocalUpdateRef = useRef(false);
@@ -813,6 +821,237 @@ export default function TranscriptPage() {
     setEditingText("");
   };
 
+  // WaveSurfer Initialization
+  useEffect(() => {
+    if (!audioSrc || !hasRealAudio || !waveformContainerRef.current) return;
+
+    if (wavesurferRef.current) {
+      wavesurferRef.current.destroy();
+    }
+
+    const ws = WaveSurfer.create({
+      container: waveformContainerRef.current,
+      media: audioRef.current || undefined,
+      waveColor: '#4ade80',
+      progressColor: '#22c55e',
+      cursorColor: '#ef4444',
+      height: 200,
+      barWidth: 2,
+      barGap: 1,
+      barRadius: 2,
+      minPxPerSec: 100, // Automatically enables horizontal scrolling by stretching the waveform
+      hideScrollbar: false, // Ensures the browser scrollbar is visible
+      autoScroll: true,
+      autoCenter: true,
+    });
+    
+    const wsRegions = ws.registerPlugin(RegionsPlugin.create());
+    wsRegions.enableDragSelection({
+      color: 'rgba(239, 68, 68, 0.3)',
+    });
+
+    // Clear region selection if user clicks on the background waveform
+    ws.on('click', () => {
+      if (wsRegionsRef.current) {
+        wsRegionsRef.current.getRegions().forEach((region: any) => region.remove());
+      }
+    });
+
+    wavesurferRef.current = ws;
+    wsRegionsRef.current = wsRegions;
+
+    return () => {
+      wsRegions.destroy();
+      ws.destroy();
+    };
+  }, [audioSrc, hasRealAudio]);
+
+  // Global click listener to deselect regions when clicking outside the waveform
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        waveformContainerRef.current && 
+        !waveformContainerRef.current.contains(e.target as Node)
+      ) {
+        if (wsRegionsRef.current) {
+          wsRegionsRef.current.getRegions().forEach((region: any) => region.remove());
+        }
+      }
+    };
+    
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const deleteWaveformRegion = (startSec: number, endSec: number) => {
+    if (endSec <= startSec) return;
+    const duration = endSec - startSec;
+    
+    // 1. Snip the audio instantly via in-memory cache
+    executeAudioCut(startSec, endSec);
+    
+    // 2. Diff the transcript
+    let anyChanges = false;
+    
+    const updatedTranscript = transcriptData.map((item, index) => {
+       const lineStartSec = timeStringToSeconds(item.time);
+       let wordsMeta = item.words;
+       
+       // Fallback: If no word-level timestamps exist, approximate them!
+       if (!wordsMeta || wordsMeta.length === 0) {
+          const textWords = (item.text || "").split(/\s+/).filter(Boolean);
+          let nextTime = lineStartSec + 5;
+          if (transcriptData[index + 1]) {
+             nextTime = timeStringToSeconds(transcriptData[index + 1].time);
+          }
+          const wordLen = Math.max(0.2, (nextTime - lineStartSec) / (textWords.length || 1));
+          wordsMeta = textWords.map((word: string, i: number) => ({
+             word,
+             start: lineStartSec + i * wordLen,
+             end: lineStartSec + (i + 1) * wordLen
+          }));
+       }
+       
+       if (wordsMeta && wordsMeta.length > 0) {
+          const keptWordsMeta: any[] = [];
+          for (const w of wordsMeta) {
+             const wordCenter = (w.start + w.end) / 2;
+             if (wordCenter >= startSec && wordCenter <= endSec) {
+                anyChanges = true;
+             } else {
+                if (w.start >= endSec) {
+                   keptWordsMeta.push({
+                      ...w,
+                      start: Math.max(0, w.start - duration),
+                      end: Math.max(0, w.end - duration)
+                   });
+                } else {
+                   keptWordsMeta.push(w);
+                }
+             }
+          }
+          
+          if (keptWordsMeta.length !== wordsMeta.length || keptWordsMeta.some((w, i) => w.start !== wordsMeta[i].start)) {
+             const newText = keptWordsMeta.map(w => (w.word || "").trim()).join(" ").trim();
+             let newTime = item.time;
+             if (lineStartSec >= endSec || keptWordsMeta.length > 0 && keptWordsMeta[0].start < lineStartSec) {
+                const startRef = keptWordsMeta.length > 0 ? keptWordsMeta[0].start : Math.max(0, lineStartSec - duration);
+                const hrs = Math.floor(startRef / 3600);
+                const mins = Math.floor((startRef % 3600) / 60);
+                const secs = Math.floor(startRef % 60);
+                newTime = `${hrs.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+             }
+             anyChanges = true;
+             return { ...item, text: newText, words: keptWordsMeta.length > 0 ? keptWordsMeta : undefined, time: newTime };
+          }
+       }
+       return item;
+    }).filter(item => item && item.text && item.text.trim() !== "");
+    
+    if (anyChanges) {
+       isLocalUpdateRef.current = true;
+       setTranscriptData(updatedTranscript);
+       pushToHistory(updatedTranscript);
+       persistTranscriptToDatabase(updatedTranscript);
+    }
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+
+      if ((e.key === "Backspace" || e.key === "Delete") && wsRegionsRef.current) {
+        const regions = wsRegionsRef.current.getRegions();
+        if (regions.length > 0) {
+          e.preventDefault();
+          const region = regions[0];
+          const start = region.start;
+          const end = region.end;
+          region.remove();
+          deleteWaveformRegion(start, end);
+        }
+      }
+    };
+    
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [transcriptData]);
+
+  const executeAudioCut = async (cutStartSec: number, cutEndSec: number) => {
+    if (!hasRealAudio || !audioSrc) return;
+    try {
+      let audioBuffer = currentAudioBufferCache;
+      
+      // Fetch and decode original if not in cache (first time)
+      if (!audioBuffer || currentAudioCallId !== activeCallId) {
+        const proxyUrl = audioSrc.startsWith("http") && !audioSrc.includes("/api/audio")
+          ? `/api/audio?url=${encodeURIComponent(audioSrc)}`
+          : audioSrc;
+        const response = await fetch(proxyUrl);
+        const arrayBuffer = await response.arrayBuffer();
+        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        const audioCtx = new AudioContextClass();
+        audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+      }
+
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      const audioCtx = new AudioContextClass();
+      
+      const sampleRate = audioBuffer.sampleRate;
+      const channels = audioBuffer.numberOfChannels;
+      const totalSamples = audioBuffer.length;
+
+      const cutStartSample = Math.max(0, Math.floor(cutStartSec * sampleRate));
+      const cutEndSample = Math.min(totalSamples, Math.ceil(cutEndSec * sampleRate));
+      const cutSampleLength = cutEndSample - cutStartSample;
+
+      if (totalSamples - cutSampleLength > 0) {
+        const trimmedBuffer = audioCtx.createBuffer(channels, totalSamples - cutSampleLength, sampleRate);
+        for (let channel = 0; channel < channels; channel++) {
+          const oldData = audioBuffer.getChannelData(channel);
+          const newData = trimmedBuffer.getChannelData(channel);
+          if (cutStartSample > 0) {
+            newData.set(oldData.subarray(0, cutStartSample), 0);
+          }
+          if (cutEndSample < totalSamples) {
+            newData.set(oldData.subarray(cutEndSample, totalSamples), cutStartSample);
+          }
+        }
+
+        // Update the in-memory cache for instant future cuts!
+        currentAudioBufferCache = trimmedBuffer;
+        currentAudioCallId = activeCallId;
+
+        const wavBlob = audioBufferToWavBlob(trimmedBuffer);
+        const trimmedBlobUrl = URL.createObjectURL(wavBlob);
+
+        setAudioSrc(trimmedBlobUrl);
+        setHasBeenTrimmed(true);
+        setDurationSec(Math.round(trimmedBuffer.duration));
+
+        // Sync history with the new Blob URL so Undo works for audio!
+        const stack = historyStackRef.current;
+        if (stack.length > 0) {
+          stack[stack.length - 1].audioSrc = trimmedBlobUrl;
+          saveHistoryToStorage(activeCallId, stack, historyIndexRef.current, deletedTimeRangesRef.current);
+        }
+
+        if (audioRef.current) {
+          const wasPlaying = isPlaying || !audioRef.current.paused;
+          audioRef.current.src = trimmedBlobUrl;
+          audioRef.current.load();
+          audioRef.current.currentTime = Math.max(0, Math.min(trimmedBuffer.duration, cutStartSec));
+          if (wasPlaying) {
+            audioRef.current.play().catch(() => {});
+          }
+        }
+      }
+    } catch (audioErr) {
+      console.warn("Fast audio trim failed", audioErr);
+    }
+  };
+
   const deleteTranscriptLine = async (index: number) => {
     const lineToDelete = transcriptData[index];
     if (!lineToDelete) return;
@@ -868,64 +1107,10 @@ export default function TranscriptPage() {
     pushToHistory(updatedTranscript);
     persistTranscriptToDatabase(updatedTranscript);
 
-    // 2. Non-blocking Asynchronous Web Audio Trimming (Background Macro-task)
+    // 2. Perform Instant In-Memory Audio Cut!
     if (hasRealAudio && audioSrc) {
-      setTimeout(async () => {
-        try {
-          // Use CORS proxy for remote Firebase URLs to prevent fetch CORS errors
-          const proxyUrl = audioSrc.startsWith("http") && !audioSrc.includes("/api/audio")
-            ? `/api/audio?url=${encodeURIComponent(audioSrc)}`
-            : audioSrc;
-          const response = await fetch(proxyUrl);
-          const arrayBuffer = await response.arrayBuffer();
-          const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-          const audioCtx = new AudioContextClass();
-          const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-
-          const sampleRate = audioBuffer.sampleRate;
-          const channels = audioBuffer.numberOfChannels;
-          const totalSamples = audioBuffer.length;
-
-          const cutStartSample = Math.max(0, Math.floor(tStart * sampleRate));
-          const cutEndSample = Math.min(totalSamples, Math.ceil(tEnd * sampleRate));
-          const cutSampleLength = cutEndSample - cutStartSample;
-
-          if (totalSamples - cutSampleLength > 0) {
-            const trimmedBuffer = audioCtx.createBuffer(channels, totalSamples - cutSampleLength, sampleRate);
-            for (let channel = 0; channel < channels; channel++) {
-              const oldData = audioBuffer.getChannelData(channel);
-              const newData = trimmedBuffer.getChannelData(channel);
-              // Part 1: before cut
-              if (cutStartSample > 0) {
-                newData.set(oldData.subarray(0, cutStartSample), 0);
-              }
-              // Part 2: after cut
-              if (cutEndSample < totalSamples) {
-                newData.set(oldData.subarray(cutEndSample, totalSamples), cutStartSample);
-              }
-            }
-
-            const wavBlob = audioBufferToWavBlob(trimmedBuffer);
-            const trimmedBlobUrl = URL.createObjectURL(wavBlob);
-
-            setAudioSrc(trimmedBlobUrl);
-            setHasBeenTrimmed(true);
-            setDurationSec(Math.round(trimmedBuffer.duration));
-
-            // ⚡ FORCE HTML5 <audio> element to load the trimmed audio immediately!
-            if (audioRef.current) {
-              const wasPlaying = isPlaying || !audioRef.current.paused;
-              audioRef.current.src = trimmedBlobUrl;
-              audioRef.current.load();
-              audioRef.current.currentTime = Math.max(0, Math.min(trimmedBuffer.duration, tStart));
-              if (wasPlaying) {
-                audioRef.current.play().catch(() => {});
-              }
-            }
-          }
-        } catch (audioErr) {
-          console.warn("Background audio trimming handled asynchronously:", audioErr);
-        }
+      setTimeout(() => {
+        executeAudioCut(tStart, tEnd);
       }, 10);
     }
   };
@@ -1175,11 +1360,36 @@ export default function TranscriptPage() {
             </section>
 
             {/* Audio Player Card */}
-            <section className={styles.playerCard}>
+            <section className={styles.playerCard} style={{ flexDirection: 'column', alignItems: 'stretch', gap: '16px' }}>
+              {hasRealAudio && (
+                <div style={{ width: '100%' }}>
+                  <div ref={waveformContainerRef} style={{ width: '100%', background: '#18181b', borderRadius: '8px', overflow: 'hidden' }} />
+                  
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', marginTop: '8px', flexWrap: 'wrap', gap: '10px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontSize: '11px', color: 'var(--color-text-muted)', fontWeight: 600 }}>Zoom:</span>
+                      <input 
+                        type="range" 
+                        min="1" 
+                        max="100" 
+                        defaultValue="100"
+                        onChange={(e) => {
+                          if (wavesurferRef.current) {
+                            wavesurferRef.current.zoom(Number(e.target.value));
+                          }
+                        }}
+                        className={styles.zoomSlider}
+                        title="Adjust Waveform Zoom"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
               {hasRealAudio && (
                 <audio
                   ref={audioRef}
-                  src={audioSrc}
+                  src={audioSrc.startsWith("http") && !audioSrc.includes("/api/audio") ? `/api/audio?url=${encodeURIComponent(audioSrc)}` : audioSrc}
+                  crossOrigin="anonymous"
                   onTimeUpdate={handleAudioTimeUpdate}
                   onLoadedMetadata={handleAudioLoadedMetadata}
                   onEnded={handleAudioEnded}
@@ -1187,141 +1397,144 @@ export default function TranscriptPage() {
                 />
               )}
 
-              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                {/* Rewind -10s */}
-                <button 
-                  onClick={() => handleSeek(-10)}
-                  title="Rewind 10 seconds"
-                  style={{ background: "#f4f4f5", border: "none", padding: "6px 10px", borderRadius: "6px", cursor: "pointer", fontSize: "12px", fontWeight: "600" }}
-                >
-                  ↺ 10s
-                </button>
-                
-                {/* Play / Pause */}
-                <button 
-                  className={styles.playButton} 
-                  onClick={handlePlayPause}
-                  aria-label={isPlaying ? "Pause" : "Play"}
-                >
-                  {isPlaying ? <PauseIcon /> : <PlayIcon />}
-                </button>
-
-                {/* Fast-Forward +10s */}
-                <button 
-                  onClick={() => handleSeek(10)}
-                  title="Fast-forward 10 seconds"
-                  style={{ background: "#f4f4f5", border: "none", padding: "6px 10px", borderRadius: "6px", cursor: "pointer", fontSize: "12px", fontWeight: "600" }}
-                >
-                  10s ↻
-                </button>
-              </div>
-              
-              <div 
-                className={styles.progressBarContainer}
-                onClick={handleProgressBarClick}
-                ref={progressBarRef}
-                style={{ cursor: "pointer", position: "relative" }}
-              >
-                <div className={styles.progressBarTrack} style={{ position: "relative" }}>
-                  {/* Red Shaded Visual Micro-Trim Cut Regions on Timeline */}
-                  {deletedRangesState.map((range, rIdx) => {
-                    const leftPct = (range.start / (durationSec || 1)) * 100;
-                    const widthPct = Math.max(0.4, ((range.end - range.start) / (durationSec || 1)) * 100);
-                    return (
-                      <div
-                        key={rIdx}
-                        title={`Micro-Trimmed Cut: ${range.start.toFixed(2)}s to ${range.end.toFixed(2)}s`}
-                        style={{
-                          position: "absolute",
-                          left: `${leftPct}%`,
-                          width: `${widthPct}%`,
-                          height: "100%",
-                          background: "#ef4444",
-                          boxShadow: "0 0 6px rgba(239, 68, 68, 0.8)",
-                          borderRadius: "2px",
-                          zIndex: 3,
-                          pointerEvents: "none"
-                        }}
-                      />
-                    );
-                  })}
-
-                  <div 
-                    className={styles.progressBarProgress} 
-                    style={{ width: `${(currentTime / (durationSec || 1)) * 100}%` }}
+              {/* Playback Controls Row */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '16px', width: '100%' }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                  {/* Rewind -10s */}
+                  <button 
+                    onClick={() => handleSeek(-10)}
+                    title="Rewind 10 seconds"
+                    className={styles.skipButton}
                   >
-                    <div className={styles.progressBarDot} />
+                    ↺ 10s
+                  </button>
+                  
+                  {/* Play / Pause */}
+                  <button 
+                    className={styles.playButton} 
+                    onClick={handlePlayPause}
+                    aria-label={isPlaying ? "Pause" : "Play"}
+                  >
+                    {isPlaying ? <PauseIcon /> : <PlayIcon />}
+                  </button>
+
+                  {/* Fast-Forward +10s */}
+                  <button 
+                    onClick={() => handleSeek(10)}
+                    title="Fast-forward 10 seconds"
+                    className={styles.skipButton}
+                  >
+                    10s ↻
+                  </button>
+                </div>
+                
+                <div 
+                  className={styles.progressBarContainer}
+                  onClick={handleProgressBarClick}
+                  ref={progressBarRef}
+                  style={{ cursor: "pointer", position: "relative" }}
+                >
+                  <div className={styles.progressBarTrack} style={{ position: "relative" }}>
+                    {/* Red Shaded Visual Micro-Trim Cut Regions on Timeline */}
+                    {deletedRangesState.map((range, rIdx) => {
+                      const leftPct = (range.start / (durationSec || 1)) * 100;
+                      const widthPct = Math.max(0.4, ((range.end - range.start) / (durationSec || 1)) * 100);
+                      return (
+                        <div
+                          key={rIdx}
+                          title={`Micro-Trimmed Cut: ${range.start.toFixed(2)}s to ${range.end.toFixed(2)}s`}
+                          style={{
+                            position: "absolute",
+                            left: `${leftPct}%`,
+                            width: `${widthPct}%`,
+                            height: "100%",
+                            background: "#ef4444",
+                            boxShadow: "0 0 6px rgba(239, 68, 68, 0.8)",
+                            borderRadius: "2px",
+                            zIndex: 3,
+                            pointerEvents: "none"
+                          }}
+                        />
+                      );
+                    })}
+
+                    <div 
+                      className={styles.progressBarProgress} 
+                      style={{ width: `${(currentTime / (durationSec || 1)) * 100}%` }}
+                    >
+                      <div className={styles.progressBarDot} />
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              <div className={styles.timeCounter}>
-                {formatTime(currentTime)} <span className={styles.timeDivider}>/</span> {formatTime(durationSec)}
-              </div>
+                <div className={styles.timeCounter}>
+                  {formatTime(currentTime)} <span className={styles.timeDivider}>/</span> {formatTime(durationSec)}
+                </div>
 
-              {/* Playback Speed Selector */}
-              <select
-                value={playbackSpeed}
-                onChange={(e) => handleSpeedChange(parseFloat(e.target.value))}
-                style={{ background: "#f4f4f5", border: "1px solid #e4e4e7", padding: "4px 8px", borderRadius: "6px", fontSize: "12px", fontWeight: 600, cursor: "pointer" }}
-                title="Playback Speed"
-              >
-                <option value={0.5}>0.5x</option>
-                <option value={0.75}>0.75x</option>
-                <option value={1.0}>1.0x</option>
-                <option value={1.25}>1.25x</option>
-                <option value={1.5}>1.5x</option>
-                <option value={2.0}>2.0x</option>
-              </select>
-
-              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                <button
-                  type="button"
-                  onClick={handleDownloadTranscript}
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: "6px",
-                    padding: "6px 12px",
-                    borderRadius: "20px",
-                    background: "#3b82f6",
-                    color: "#ffffff",
-                    fontSize: "12px",
-                    fontWeight: 600,
-                    border: "none",
-                    cursor: "pointer",
-                    boxShadow: "0 2px 6px rgba(59, 130, 246, 0.3)",
-                    transition: "all 0.2s ease"
-                  }}
-                  title="Download transcript text file"
+                {/* Playback Speed Selector */}
+                <select
+                  value={playbackSpeed}
+                  onChange={(e) => handleSpeedChange(parseFloat(e.target.value))}
+                  style={{ background: "#f4f4f5", border: "1px solid #e4e4e7", padding: "4px 8px", borderRadius: "6px", fontSize: "12px", fontWeight: 600, cursor: "pointer" }}
+                  title="Playback Speed"
                 >
-                  📄 Download Transcript
-                </button>
+                  <option value={0.5}>0.5x</option>
+                  <option value={0.75}>0.75x</option>
+                  <option value={1.0}>1.0x</option>
+                  <option value={1.25}>1.25x</option>
+                  <option value={1.5}>1.5x</option>
+                  <option value={2.0}>2.0x</option>
+                </select>
 
-                {hasRealAudio && (
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                   <button
                     type="button"
-                    onClick={handleDownloadAudio}
+                    onClick={handleDownloadTranscript}
                     style={{
                       display: "inline-flex",
                       alignItems: "center",
                       gap: "6px",
                       padding: "6px 12px",
                       borderRadius: "20px",
-                      background: hasBeenTrimmed ? "linear-gradient(135deg, #ef4444 0%, #b91c1c 100%)" : "#10b981",
+                      background: "#3b82f6",
                       color: "#ffffff",
                       fontSize: "12px",
                       fontWeight: 600,
                       border: "none",
                       cursor: "pointer",
-                      boxShadow: hasBeenTrimmed ? "0 2px 6px rgba(239, 68, 68, 0.3)" : "0 2px 6px rgba(16, 185, 129, 0.3)",
+                      boxShadow: "0 2px 6px rgba(59, 130, 246, 0.3)",
                       transition: "all 0.2s ease"
                     }}
-                    title={hasBeenTrimmed ? "Download audio call with deleted lines trimmed out" : "Download call audio file"}
+                    title="Download transcript text file"
                   >
-                    {hasBeenTrimmed ? "✂️ Download Trimmed Audio" : "🎵 Download Audio"}
+                    📄 Download Transcript
                   </button>
-                )}
+
+                  {hasRealAudio && (
+                    <button
+                      type="button"
+                      onClick={handleDownloadAudio}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "6px",
+                        padding: "6px 12px",
+                        borderRadius: "20px",
+                        background: hasBeenTrimmed ? "linear-gradient(135deg, #ef4444 0%, #b91c1c 100%)" : "#10b981",
+                        color: "#ffffff",
+                        fontSize: "12px",
+                        fontWeight: 600,
+                        border: "none",
+                        cursor: "pointer",
+                        boxShadow: hasBeenTrimmed ? "0 2px 6px rgba(239, 68, 68, 0.3)" : "0 2px 6px rgba(16, 185, 129, 0.3)",
+                        transition: "all 0.2s ease"
+                      }}
+                      title={hasBeenTrimmed ? "Download audio call with deleted lines trimmed out" : "Download call audio file"}
+                    >
+                      {hasBeenTrimmed ? "✂️ Download Trimmed Audio" : "🎵 Download Audio"}
+                    </button>
+                  )}
+                </div>
               </div>
             </section>
 
