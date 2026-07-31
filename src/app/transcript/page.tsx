@@ -585,6 +585,15 @@ export default function TranscriptPage() {
           if (!audioSrcRef.current) {
             audioSrcRef.current = audioFileUrl;
             setAudioSrc(audioFileUrl);
+            
+            // Imperatively set initial uncut audio source instantly so player isn't empty!
+            if (audioRef.current) {
+              const proxyUrl = audioFileUrl.startsWith("http") && !audioFileUrl.includes("/api/audio")
+                ? `/api/audio?url=${encodeURIComponent(audioFileUrl)}`
+                : audioFileUrl;
+              audioRef.current.src = proxyUrl;
+              audioRef.current.load();
+            }
           }
           setHasRealAudio(true);
 
@@ -1381,7 +1390,6 @@ export default function TranscriptPage() {
               {hasRealAudio && (
                 <audio
                   ref={audioRef}
-                  src={audioSrc.startsWith("http") && !audioSrc.includes("/api/audio") ? `/api/audio?url=${encodeURIComponent(audioSrc)}` : audioSrc}
                   crossOrigin="anonymous"
                   onTimeUpdate={handleAudioTimeUpdate}
                   onLoadedMetadata={handleAudioLoadedMetadata}
