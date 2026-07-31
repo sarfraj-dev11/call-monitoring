@@ -982,7 +982,14 @@ export default function TranscriptPage() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return;
+
+      // Spacebar = Play / Pause audio
+      if (e.code === 'Space' || e.key === ' ') {
+        e.preventDefault();
+        setIsPlaying(prev => !prev);
+        return;
+      }
 
       // Ctrl+Z = Undo
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
