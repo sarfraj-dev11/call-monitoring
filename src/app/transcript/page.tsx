@@ -1075,7 +1075,6 @@ export default function TranscriptPage() {
         const wavBlob = audioBufferToWavBlob(trimmedBuffer);
         const trimmedBlobUrl = URL.createObjectURL(wavBlob);
 
-        setAudioSrc(trimmedBlobUrl);
         setHasBeenTrimmed(true);
         setDurationSec(Math.round(trimmedBuffer.duration));
 
@@ -1086,6 +1085,7 @@ export default function TranscriptPage() {
           saveHistoryToStorage(activeCallId, stack, historyIndexRef.current, deletedTimeRangesRef.current);
         }
 
+        // Direct HTML5 + WaveSurfer update to avoid blank React re-render flash!
         if (audioRef.current) {
           const wasPlaying = isPlaying || !audioRef.current.paused;
           audioRef.current.src = trimmedBlobUrl;
@@ -1094,6 +1094,12 @@ export default function TranscriptPage() {
           if (wasPlaying) {
             audioRef.current.play().catch(() => {});
           }
+        }
+
+        if (wavesurferRef.current) {
+          try {
+            wavesurferRef.current.load(trimmedBlobUrl);
+          } catch (e) {}
         }
       }
     } catch (audioErr) {
