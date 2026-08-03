@@ -13,15 +13,17 @@ function formatSecondsToHms(seconds: number): string {
   return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(remainingSecs).padStart(2, '0')}`;
 }
 
-async function transcribeWithDeepgram(buffer: Buffer, mimeType: string, deepgramApiKey: string) {
+async function transcribeWithDeepgram(audioInput: Buffer | string, mimeType: string, deepgramApiKey: string) {
   const url = "https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&diarize=true&utterances=true&punctuate=true";
+  const isUrl = typeof audioInput === "string";
+
   const res = await fetch(url, {
     method: "POST",
     headers: {
       "Authorization": `Token ${deepgramApiKey.trim()}`,
-      "Content-Type": mimeType || "audio/mp3"
+      "Content-Type": isUrl ? "application/json" : (mimeType || "audio/mp3")
     },
-    body: new Uint8Array(buffer) as unknown as BodyInit,
+    body: isUrl ? JSON.stringify({ url: audioInput }) : (new Uint8Array(audioInput as Buffer) as unknown as BodyInit),
     signal: AbortSignal.timeout(900000)
   });
 
@@ -457,24 +459,17 @@ export async function POST(request: Request) {
       // Handle Firebase Storage Audio URL
       if (audioUrl) {
         try {
-          console.log(`Fetching audio directly from Firebase Storage URL: ${audioUrl.substring(0, 80)}...`);
-          const audioRes = await fetch(audioUrl);
-          if (!audioRes.ok) throw new Error(`Failed to fetch audio from Firebase Storage: ${audioRes.status}`);
-          const arrayBuffer = await audioRes.arrayBuffer();
-          const buffer = Buffer.from(arrayBuffer);
-          base64AudioData = buffer.toString("base64");
-          const fileBlob = new Blob([buffer], { type: fileMimeType || "audio/mp3" });
           const reqFileName = fileName || "audio.mp3";
           const reqDurationSec = Number(durationSec) || 0;
 
-          // 1. Try Deepgram Nova-2 API (#1 Enterprise Gold Standard)
+          // 1. Try Deepgram Nova-2 API directly via Audio URL (#1 Enterprise Gold Standard - Bypasses Vercel RAM)
           const deepgramApiKey = process.env.DEEPGRAM_API_KEY;
           if (deepgramApiKey) {
             try {
-              console.log(`Sending ${reqFileName} to Deepgram Nova-2 API...`);
-              const dgRes = await transcribeWithDeepgram(buffer, fileMimeType || "audio/mp3", deepgramApiKey);
+              console.log(`Sending URL for ${reqFileName} directly to Deepgram Nova-2 API...`);
+              const dgRes = await transcribeWithDeepgram(audioUrl, fileMimeType || "audio/mp3", deepgramApiKey);
               if (dgRes && dgRes.transcript && dgRes.transcript.length > 0) {
-                console.log(`Deepgram Nova-2 successfully transcribed audio from URL (${dgRes.transcript.length} turns)!`);
+                console.log(`Deepgram Nova-2 successfully transcribed audio directly from URL (${dgRes.transcript.length} turns)!`);
                 const transcribeTimeMs = Date.now() - routeStartTime;
                 const transcribeTimeSec = Math.round(transcribeTimeMs / 100) / 10;
                 const today = new Date();
@@ -484,6 +479,33 @@ export async function POST(request: Request) {
                 const mins = Math.floor(calculatedDurationSec / 60);
                 const secs = Math.round(calculatedDurationSec % 60);
                 const formattedDuration = mins > 0 ? (secs > 0 ? `${mins} min ${secs} sec` : `${mins} min`) : `${secs} sec`;
+
+                return NextResponse.json({
+                  agentName: dgRes.agentName || "Adam Miller",
+                  date: formattedToday,
+                  dateStr: formattedIso,
+                  duration: formattedDuration,
+                  durationSec: calculatedDurationSec,
+                  language: dgRes.language || "English",
+                  transcript: dgRes.transcript,
+                  transcribeTimeMs,
+                  transcribeTimeSec,
+                  transcribeTokens: 0,
+                  tokensUsed: 0,
+                  audioUrl: audioUrl
+                });
+              }
+            } catch (dgErr) {
+              console.warn("Deepgram URL transcription failed, falling back to buffer fetch:", dgErr);
+            }
+          }
+
+          console.log(`Fetching audio directly from Firebase Storage URL: ${audioUrl.substring(0, 80)}...`);
+          const audioRes = await fetch(audioUrl);
+          if (!audioRes.ok) throw new Error(`Failed to fetch audio from Firebase Storage: ${audioRes.status}`);
+          const arrayBuffer = await audioRes.arrayBuffer();
+          const buffer = Buffer.from(arrayBuffer);
+          base64AudioData = buffer.toString("base64");
 
                 return NextResponse.json({
                   agentName: "Mike Ross",

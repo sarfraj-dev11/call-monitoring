@@ -686,7 +686,7 @@ export default function Home() {
           console.error("Failed to get audio duration:", durErr);
         }
 
-        // Step 1: Direct Upload & Transcribe to Local Server (Bypasses Firebase for instant speed)
+        // Step 1: Upload & Transcribe
         setPipelineStep(1); // Uploading & Transcribing
         
         if (isCancelledRef.current) break;
@@ -694,6 +694,40 @@ export default function Home() {
         const uploadFormData = new FormData();
         uploadFormData.append("file", file);
         uploadFormData.append("durationSec", String(durationSec));
+
+        let audioUrl = "";
+        let useJsonBody = false;
+
+        // If file > 4MB (like long 90-min calls), upload directly to Firebase Storage first to bypass Vercel 4.5MB serverless limit
+        if (file.size > 4 * 1024 * 1024) {
+          try {
+            console.log(`File size is ${(file.size / (1024 * 1024)).toFixed(1)}MB (>4MB). Uploading to Firebase Storage to bypass Vercel 4.5MB payload limit...`);
+            const storageRef = ref(storage, `uploads/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.-]/g, "_")}`);
+            const uploadTask = uploadBytesResumable(storageRef, file);
+
+            await new Promise<void>((resolve, reject) => {
+              uploadTask.on(
+                "state_changed",
+                (snapshot) => {
+                  const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+                  setUploadProgress(Math.round(progress));
+                },
+                (err) => reject(err),
+                async () => {
+                  try {
+                    audioUrl = await getDownloadURL(uploadTask.snapshot.ref);
+                    resolve();
+                  } catch (urlErr) {
+                    reject(urlErr);
+                  }
+                }
+              );
+            });
+            useJsonBody = true;
+          } catch (stgErr) {
+            console.warn("Firebase Storage upload failed, falling back to direct POST:", stgErr);
+          }
+        }
 
         setUploadProgress(100);
         setPipelineStep(2); // Transcribing
@@ -707,11 +741,25 @@ export default function Home() {
         while (attempts < maxAttempts) {
           if (isCancelledRef.current) break;
           try {
-            response = await fetch("/api/transcribe", {
-              method: "POST",
-              body: uploadFormData,
-              signal: abortControllerRef.current?.signal
-            });
+            if (useJsonBody && audioUrl) {
+              response = await fetch("/api/transcribe", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  audioUrl,
+                  fileName: file.name,
+                  fileMimeType: file.type || "audio/mp3",
+                  durationSec
+                }),
+                signal: abortControllerRef.current?.signal
+              });
+            } else {
+              response = await fetch("/api/transcribe", {
+                method: "POST",
+                body: uploadFormData,
+                signal: abortControllerRef.current?.signal
+              });
+            }
 
             if (!response.ok) {
               const errText = await response.text();
