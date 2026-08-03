@@ -506,28 +506,7 @@ export async function POST(request: Request) {
           const arrayBuffer = await audioRes.arrayBuffer();
           const buffer = Buffer.from(arrayBuffer);
           base64AudioData = buffer.toString("base64");
-
-                return NextResponse.json({
-                  agentName: "Mike Ross",
-                  date: formattedToday,
-                  dateStr: formattedIso,
-                  duration: formattedDuration,
-                  durationSec: calculatedDurationSec,
-                  language: dgRes.language || "English",
-                  transcript: dgRes.transcript,
-                  transcribeTimeMs,
-                  transcribeTimeSec,
-                  transcribeTokens: 0,
-                  tokensUsed: 0,
-                  evaluation: null,
-                  qaAnalysis: null,
-                  audioUrl
-                });
-              }
-            } catch (dgErr) {
-              console.warn("Deepgram Nova-2 transcription failed, falling back to Groq...", dgErr);
-            }
-          }
+          const fileBlob = new Blob([buffer], { type: fileMimeType || "audio/mp3" });
 
           // 2. Try Groq Whisper API (Free & Fast)
           const groqApiKey = process.env.GROQ_API_KEY;
