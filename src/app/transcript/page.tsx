@@ -1375,6 +1375,20 @@ export default function TranscriptPage() {
       if (timer) clearTimeout(timer);
     };
   }, [isAudioBuffering]);
+  // Synchronize audioSrc with HTML5 audio element and trigger load()
+  useEffect(() => {
+    if (audioRef.current && audioSrc) {
+      const proxyUrl = audioSrc.startsWith("http") && !audioSrc.includes("/api/audio")
+        ? `/api/audio?url=${encodeURIComponent(audioSrc)}`
+        : (audioSrc.startsWith("/uploads/") ? `/api/audio?file=${audioSrc.replace("/uploads/", "")}` : audioSrc);
+      
+      const fullUrl = proxyUrl.startsWith("http") ? proxyUrl : window.location.origin + proxyUrl;
+      if (audioRef.current.src !== fullUrl) {
+        audioRef.current.src = proxyUrl;
+        audioRef.current.load();
+      }
+    }
+  }, [audioSrc]);
 
   const handleAudioError = (e: any) => {
     setIsAudioBuffering(false);
