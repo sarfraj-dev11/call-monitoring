@@ -371,26 +371,11 @@ export default function TranscriptPage() {
       isLocalUpdateRef.current = true;
       setTranscriptData(state.transcript);
 
-      // Restore deleted ranges for audio playback & visual progress bar!
+      // Instantly restore deleted ranges for virtual timeline skipping (0.001s speed!)
       const restoredRanges = state.deletedRanges || [];
       deletedTimeRangesRef.current = JSON.parse(JSON.stringify(restoredRanges));
       setDeletedRangesState(restoredRanges);
-      syncWaveformRegions(restoredRanges);
 
-      // Instantly physically reconstruct the exact audio buffer timeline for this undo state!
-      prewarmAudioCache(state.audioSrc || audioSrc, activeCallId, restoredRanges, (blobUrl) => {
-        if (audioRef.current) {
-          const wasPlaying = isPlaying || !audioRef.current.paused;
-          audioRef.current.src = blobUrl;
-          audioRef.current.load();
-          if (wasPlaying) audioRef.current.play().catch(() => {});
-        }
-        if (wavesurferRef.current) {
-          try {
-            Promise.resolve(wavesurferRef.current.load(blobUrl)).catch(() => {});
-          } catch (e) {}
-        }
-      });
       persistTranscriptToDatabase(state.transcript, state.audioSrc);
       updateUndoRedoState();
       saveHistoryToStorage(activeCallId, historyStackRef.current, historyIndexRef.current, restoredRanges);
@@ -405,26 +390,11 @@ export default function TranscriptPage() {
       isLocalUpdateRef.current = true;
       setTranscriptData(state.transcript);
 
-      // Restore deleted ranges for audio playback & visual progress bar!
+      // Instantly restore deleted ranges for virtual timeline skipping (0.001s speed!)
       const restoredRanges = state.deletedRanges || [];
       deletedTimeRangesRef.current = JSON.parse(JSON.stringify(restoredRanges));
       setDeletedRangesState(restoredRanges);
-      syncWaveformRegions(restoredRanges);
 
-      // Instantly physically reconstruct the exact audio buffer timeline for this redo state!
-      prewarmAudioCache(state.audioSrc || audioSrc, activeCallId, restoredRanges, (blobUrl) => {
-        if (audioRef.current) {
-          const wasPlaying = isPlaying || !audioRef.current.paused;
-          audioRef.current.src = blobUrl;
-          audioRef.current.load();
-          if (wasPlaying) audioRef.current.play().catch(() => {});
-        }
-        if (wavesurferRef.current) {
-          try {
-            Promise.resolve(wavesurferRef.current.load(blobUrl)).catch(() => {});
-          } catch (e) {}
-        }
-      });
       persistTranscriptToDatabase(state.transcript, state.audioSrc);
       updateUndoRedoState();
       saveHistoryToStorage(activeCallId, historyStackRef.current, historyIndexRef.current, restoredRanges);
