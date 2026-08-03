@@ -1685,7 +1685,34 @@ export default function TranscriptPage() {
                           </div>
                         ) : (
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
-                            <span>{renderHighlightedText(message.text)}</span>
+                            <span>
+                              {message.words && Array.isArray(message.words) && message.words.length > 0 ? (
+                                <span className={styles.wordContainer}>
+                                  {message.words.map((w: any, wIdx: number) => {
+                                    const isWordActive = isPlaying && currentTime >= (w.start - 0.05) && currentTime <= (w.end + 0.15);
+                                    return (
+                                      <span
+                                        key={wIdx}
+                                        className={`${styles.wordItem} ${isWordActive ? styles.activeWordItem : ""}`}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          if (audioRef.current && hasRealAudio) {
+                                            audioRef.current.currentTime = w.start;
+                                            setCurrentTime(w.start);
+                                            if (!isPlaying) setIsPlaying(true);
+                                          }
+                                        }}
+                                        title={`Click to play at ${w.start.toFixed(1)}s`}
+                                      >
+                                        {w.word}{" "}
+                                      </span>
+                                    );
+                                  })}
+                                </span>
+                              ) : (
+                                renderHighlightedText(message.text)
+                              )}
+                            </span>
                             <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
                               <button 
                                 className={styles.editTranscriptBtn}

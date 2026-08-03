@@ -507,7 +507,33 @@
   font-weight: 700 !important;
 }
 
-/* Transcript Row Layout Cells */
+/* Interactive Karaoke Word Highlighting */
+.wordContainer {
+  line-height: 1.65;
+  font-size: 13.5px;
+}
+
+.wordItem {
+  display: inline;
+  padding: 1px 3px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.wordItem:hover {
+  background-color: #e0f2fe;
+  color: #0369a1;
+}
+
+.activeWordItem {
+  background-color: #10b981 !important;
+  color: #ffffff !important;
+  font-weight: 700 !important;
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.4);
+  border-radius: 4px;
+  padding: 2px 4px;
+}
 .timestampCell {
   width: 70px;
   flex-shrink: 0;

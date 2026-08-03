@@ -76,10 +76,18 @@ async function transcribeWithDeepgram(buffer: Buffer, mimeType: string, deepgram
     const isAgent = utt.speaker === agentSpeakerId;
     const timeStr = formatSecondsToHms(utt.start || 0);
     const cleanedText = replacePseudoNamesInText((utt.transcript || "").trim());
+    const formattedWords = Array.isArray(utt.words) ? utt.words.map((w: any) => ({
+      word: replacePseudoNamesInText(w.word || ""),
+      start: w.start || 0,
+      end: w.end || 0,
+      speaker: w.speaker
+    })) : undefined;
+
     return {
       time: timeStr,
       speaker: isAgent ? "Agent" : "Customer",
-      text: cleanedText
+      text: cleanedText,
+      words: formattedWords
     };
   });
 
