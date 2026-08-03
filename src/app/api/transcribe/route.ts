@@ -21,7 +21,7 @@ async function transcribeWithDeepgram(buffer: Buffer, mimeType: string, deepgram
       "Authorization": `Token ${deepgramApiKey.trim()}`,
       "Content-Type": mimeType || "audio/mp3"
     },
-    body: buffer,
+    body: new Uint8Array(buffer) as unknown as BodyInit,
     signal: AbortSignal.timeout(900000)
   });
 
