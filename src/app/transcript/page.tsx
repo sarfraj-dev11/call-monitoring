@@ -755,6 +755,68 @@ export default function TranscriptPage() {
     setEditingText("");
   };
 
+  const saveEditing = async (index: number) => {
+    if (editingIndex === null || index < 0 || index >= transcriptData.length) return;
+
+    const originalMessage = transcriptData[index];
+    const newText = editingText.trim();
+    const oldText = (originalMessage.text || "").trim();
+
+    if (newText === oldText) {
+      cancelEditing();
+      return;
+    }
+
+    const updatedTranscript = [...transcriptData];
+    const rangesToCut: Array<{ start: number; end: number }> = [];
+
+    if (originalMessage.words && Array.isArray(originalMessage.words) && originalMessage.words.length > 0) {
+      const oldWords = originalMessage.words;
+      const newWordsText = newText.toLowerCase().split(/\s+/).filter(Boolean);
+      const remainingWords: typeof oldWords = [];
+
+      let newIdx = 0;
+      for (let i = 0; i < oldWords.length; i++) {
+        const wordObj = oldWords[i];
+        const cleanOldWord = (wordObj.word || "").toLowerCase().replace(/[^\w]/g, "");
+        const cleanNewWord = newWordsText[newIdx] ? newWordsText[newIdx].replace(/[^\w]/g, "") : "";
+
+        if (cleanOldWord && cleanNewWord && (cleanOldWord === cleanNewWord || cleanOldWord.includes(cleanNewWord) || cleanNewWord.includes(cleanOldWord))) {
+          remainingWords.push({
+            ...wordObj,
+            word: newWordsText[newIdx] || wordObj.word
+          });
+          newIdx++;
+        } else {
+          if (typeof wordObj.start === "number" && typeof wordObj.end === "number" && wordObj.end > wordObj.start) {
+            rangesToCut.push({ start: wordObj.start, end: wordObj.end });
+          }
+        }
+      }
+
+      updatedTranscript[index] = {
+        ...originalMessage,
+        text: newText,
+        words: remainingWords.length > 0 ? remainingWords : undefined
+      };
+    } else {
+      updatedTranscript[index] = {
+        ...originalMessage,
+        text: newText
+      };
+    }
+
+    isLocalUpdateRef.current = true;
+    setTranscriptData(updatedTranscript);
+    pushToHistory(updatedTranscript);
+    persistTranscriptToDatabase(updatedTranscript);
+    cancelEditing();
+
+    if (rangesToCut.length > 0) {
+      await processAudioCuts(rangesToCut);
+    }
+  };
+
   const processAudioCuts = async (rangesToCut: Array<{start: number, end: number}>) => {
     rangesToCut.sort((a, b) => b.start - a.start);
     deletedTimeRangesRef.current.push(...rangesToCut);
@@ -824,19 +886,7 @@ export default function TranscriptPage() {
     }
   };
 
-  const saveEditing = (index: number) => {
-    // Cut according to the audio, not to the transcripts!
-    // Text editing should NEVER trigger an audio cut or shift timestamps.
-    const updatedTranscript = [...transcriptData];
-    updatedTranscript[index] = { ...updatedTranscript[index], text: editingText };
-    
-    isLocalUpdateRef.current = true;
-    setTranscriptData(updatedTranscript);
-    pushToHistory(updatedTranscript);
-    persistTranscriptToDatabase(updatedTranscript);
-    setEditingIndex(null);
-    setEditingText("");
-  };
+
 
   // WaveSurfer Initialization
   useEffect(() => {
