@@ -914,81 +914,12 @@ export default function TranscriptPage() {
       return shifted;
     });
 
-    // 2. Perform Web Audio API physical audio buffer cutting & waveform graph refresh
+    // 2. Perform instant virtual timeline cut tracking (0.01s speed!)
     rangesToCut.sort((a, b) => b.start - a.start);
     deletedTimeRangesRef.current.push(...rangesToCut);
     setDeletedRangesState([...deletedTimeRangesRef.current]);
-
-    if (hasRealAudio && audioSrc) {
-      setTimeout(async () => {
-        try {
-          let currentBuffer = audioBufferCacheRef.current.get(audioSrc);
-          const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-          const audioCtx = new AudioContextClass();
-
-          if (!currentBuffer) {
-            const proxyUrl = audioSrc.startsWith("http") && !audioSrc.includes("/api/audio")
-              ? `/api/audio?url=${encodeURIComponent(audioSrc)}`
-              : audioSrc;
-            const response = await fetch(proxyUrl);
-            const arrayBuffer = await response.arrayBuffer();
-            currentBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-            audioBufferCacheRef.current.set(audioSrc, currentBuffer);
-          }
-
-          for (const range of rangesToCut) {
-             const sampleRate = currentBuffer.sampleRate;
-             const channels = currentBuffer.numberOfChannels;
-             const totalSamples = currentBuffer.length;
-             
-             const cutStartSample = Math.max(0, Math.floor(range.start * sampleRate));
-             const cutEndSample = Math.min(totalSamples, Math.ceil(range.end * sampleRate));
-             const cutSampleLength = cutEndSample - cutStartSample;
-             
-             if (totalSamples - cutSampleLength > 0) {
-                const newBuffer = audioCtx.createBuffer(channels, totalSamples - cutSampleLength, sampleRate);
-                for (let ch = 0; ch < channels; ch++) {
-                   const oldData = currentBuffer.getChannelData(ch);
-                   const newData = newBuffer.getChannelData(ch);
-                   if (cutStartSample > 0) newData.set(oldData.subarray(0, cutStartSample), 0);
-                   if (cutEndSample < totalSamples) newData.set(oldData.subarray(cutEndSample, totalSamples), cutStartSample);
-                }
-                currentBuffer = newBuffer;
-             }
-          }
-
-          const wavBlob = audioBufferToWavBlob(currentBuffer);
-          const trimmedBlobUrl = URL.createObjectURL(wavBlob);
-          
-          // Cache the newly trimmed buffer so the NEXT cut is instant!
-          audioBufferCacheRef.current.set(trimmedBlobUrl, currentBuffer);
-
-          setAudioSrc(trimmedBlobUrl);
-          setHasBeenTrimmed(true);
-          setDurationSec(Math.round(currentBuffer.duration));
-
-          // Ensure history stack perfectly tracks the physically cut blob for Redo operations
-          const currentStack = historyStackRef.current;
-          if (currentStack.length > 0) {
-            currentStack[historyIndexRef.current].audioSrc = trimmedBlobUrl;
-            saveHistoryToStorage(activeCallId, currentStack, historyIndexRef.current, deletedTimeRangesRef.current);
-          }
-
-          if (audioRef.current) {
-            const wasPlaying = isPlaying || !audioRef.current.paused;
-            audioRef.current.src = trimmedBlobUrl;
-            audioRef.current.load();
-            const earliestCut = rangesToCut[rangesToCut.length - 1].start;
-            audioRef.current.currentTime = Math.max(0, Math.min(currentBuffer.duration, earliestCut));
-            if (wasPlaying) {
-              audioRef.current.play().catch(() => {});
-            }
-          }
-        } catch (audioErr) {
-          console.warn("Background audio trimming handled asynchronously:", audioErr);
-        }
-      }, 10);
-    }
+    setHasBeenTrimmed(true);
+    saveHistoryToStorage(activeCallId, historyStackRef.current, historyIndexRef.current, deletedTimeRangesRef.current);
   };
 
 
@@ -1496,7 +1427,18 @@ export default function TranscriptPage() {
 
   const handleAudioTimeUpdate = () => {
     if (audioRef.current && hasRealAudio) {
-      setCurrentTime(audioRef.current.currentTime);
+      const time = audioRef.current.currentTime;
+      if (deletedTimeRangesRef.current.length > 0) {
+        const cut = deletedTimeRangesRef.current.find(
+          r => time >= r.start && time < r.end
+        );
+        if (cut) {
+          audioRef.current.currentTime = cut.end;
+          setCurrentTime(cut.end);
+          return;
+        }
+      }
+      setCurrentTime(time);
     }
   };
 
