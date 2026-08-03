@@ -5,6 +5,91 @@ import * as mm from "music-metadata";
 import { safeParseJson } from "@/lib/jsonRepair";
 import { normalizeAgentName, replacePseudoNamesInText } from "@/lib/pseudoNames";
 
+function formatSecondsToHms(seconds: number): string {
+  const secs = Math.floor(seconds || 0);
+  const hours = Math.floor(secs / 3600);
+  const mins = Math.floor((secs % 3600) / 60);
+  const remainingSecs = secs % 60;
+  return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(remainingSecs).padStart(2, '0')}`;
+}
+
+async function transcribeWithDeepgram(buffer: Buffer, mimeType: string, deepgramApiKey: string) {
+  const url = "https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&diarize=true&utterances=true&punctuate=true";
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Authorization": `Token ${deepgramApiKey.trim()}`,
+      "Content-Type": mimeType || "audio/mp3"
+    },
+    body: buffer,
+    signal: AbortSignal.timeout(900000)
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Deepgram API error (${res.status}): ${errText}`);
+  }
+
+  const data = await res.json();
+  const utterances = data.results?.utterances || [];
+  const channels = data.results?.channels || [];
+  const durationSec = Math.round(data.metadata?.duration || 0);
+
+  if (utterances.length === 0 && channels.length > 0) {
+    const altTranscript = channels[0]?.alternatives?.[0];
+    if (altTranscript?.transcript) {
+      const text = altTranscript.transcript.trim();
+      const sentences = text.split(/(?<=[.!?])\s+/);
+      let estSec = 0;
+      const transcriptItems = [];
+      let currentSpeaker = "Agent";
+      for (const sentence of sentences) {
+        if (!sentence.trim()) continue;
+        transcriptItems.push({
+          time: formatSecondsToHms(estSec),
+          speaker: currentSpeaker,
+          text: replacePseudoNamesInText(sentence.trim())
+        });
+        currentSpeaker = currentSpeaker === "Agent" ? "Customer" : "Agent";
+        estSec += 6;
+      }
+      return {
+        transcript: transcriptItems,
+        durationSec,
+        language: data.results?.channels?.[0]?.detected_language || "English"
+      };
+    }
+  }
+
+  let agentSpeakerId = 0;
+  if (utterances.length > 0) {
+    for (let i = 0; i < Math.min(3, utterances.length); i++) {
+      const txt = (utterances[i].transcript || "").toLowerCase();
+      if (txt.includes("thank you for calling") || txt.includes("brocus") || txt.includes("my name is") || txt.includes("how can i help")) {
+        agentSpeakerId = utterances[i].speaker;
+        break;
+      }
+    }
+  }
+
+  const transcriptItems = utterances.map((utt: any) => {
+    const isAgent = utt.speaker === agentSpeakerId;
+    const timeStr = formatSecondsToHms(utt.start || 0);
+    const cleanedText = replacePseudoNamesInText((utt.transcript || "").trim());
+    return {
+      time: timeStr,
+      speaker: isAgent ? "Agent" : "Customer",
+      text: cleanedText
+    };
+  });
+
+  return {
+    transcript: transcriptItems,
+    durationSec,
+    language: data.results?.channels?.[0]?.detected_language || "English"
+  };
+}
+
 
 async function transcribeAndEvaluateWithGemini(
   file: File,
@@ -26,8 +111,8 @@ async function transcribeAndEvaluateWithGemini(
     }
 
     const modelEndpoints = [
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`,
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${geminiApiKey}`
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${geminiApiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`
     ];
     let completionData: any = null;
 
@@ -321,7 +406,47 @@ export async function POST(request: Request) {
           const reqFileName = fileName || "audio.mp3";
           const reqDurationSec = Number(durationSec) || 0;
 
-          // 1. Try Groq Whisper API (Free & Fast)
+          // 1. Try Deepgram Nova-2 API (#1 Enterprise Gold Standard)
+          const deepgramApiKey = process.env.DEEPGRAM_API_KEY;
+          if (deepgramApiKey) {
+            try {
+              console.log(`Sending ${reqFileName} to Deepgram Nova-2 API...`);
+              const dgRes = await transcribeWithDeepgram(buffer, fileMimeType || "audio/mp3", deepgramApiKey);
+              if (dgRes && dgRes.transcript && dgRes.transcript.length > 0) {
+                console.log(`Deepgram Nova-2 successfully transcribed audio from URL (${dgRes.transcript.length} turns)!`);
+                const transcribeTimeMs = Date.now() - routeStartTime;
+                const transcribeTimeSec = Math.round(transcribeTimeMs / 100) / 10;
+                const today = new Date();
+                const formattedToday = today.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+                const formattedIso = today.toISOString().split("T")[0];
+                const calculatedDurationSec = dgRes.durationSec || reqDurationSec || 105;
+                const mins = Math.floor(calculatedDurationSec / 60);
+                const secs = Math.round(calculatedDurationSec % 60);
+                const formattedDuration = mins > 0 ? (secs > 0 ? `${mins} min ${secs} sec` : `${mins} min`) : `${secs} sec`;
+
+                return NextResponse.json({
+                  agentName: "Mike Ross",
+                  date: formattedToday,
+                  dateStr: formattedIso,
+                  duration: formattedDuration,
+                  durationSec: calculatedDurationSec,
+                  language: dgRes.language || "English",
+                  transcript: dgRes.transcript,
+                  transcribeTimeMs,
+                  transcribeTimeSec,
+                  transcribeTokens: 0,
+                  tokensUsed: 0,
+                  evaluation: null,
+                  qaAnalysis: null,
+                  audioUrl
+                });
+              }
+            } catch (dgErr) {
+              console.warn("Deepgram Nova-2 transcription failed, falling back to Groq...", dgErr);
+            }
+          }
+
+          // 2. Try Groq Whisper API (Free & Fast)
           const groqApiKey = process.env.GROQ_API_KEY;
           if (groqApiKey) {
             try {
@@ -464,20 +589,21 @@ Transcribe every single word spoken between "Agent" and "Customer".
 Perform strict speaker diarization:
 Label speaker turns clearly as "Agent" or "Customer".
 Include precise timestamps [hh:mm:ss] for every single speaker change.
+CRITICAL: Timestamps MUST accurately reflect the exact playback time (hh:mm:ss) of when the speaker begins speaking relative to the absolute start of the audio file (00:00:00). Do NOT add arbitrary offsets.
 
 Return ONLY a single valid JSON object with this EXACT structure:
 {
   "agentName": "string",
   "language": "string",
   "transcript": [
-    { "time": "00:00:05", "speaker": "Agent", "text": "Hello, thank you for calling support." },
-    { "time": "00:00:10", "speaker": "Customer", "text": "Hi, I need help with my account." }
+    { "time": "00:00:00", "speaker": "Agent", "text": "Hello, thank you for calling support." },
+    { "time": "00:00:05", "speaker": "Customer", "text": "Hi, I need help with my account." }
   ]
 }`;
 
       const modelEndpoints = [
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`,
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${geminiApiKey}`
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${geminiApiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`
       ];
 
       let completionData: any = null;
@@ -622,7 +748,47 @@ Return ONLY a single valid JSON object with this EXACT structure:
 
       audioUrl = `/api/audio?file=${fileName}`;
 
-      // 1. Groq Whisper API Transcriber (100% FREE, Ultra-Fast 200x speed)
+      // 1. Deepgram Nova-2 API (#1 Enterprise Gold Standard)
+      const deepgramApiKey = process.env.DEEPGRAM_API_KEY;
+      if (deepgramApiKey) {
+        try {
+          console.log(`Sending ${file.name} to Deepgram Nova-2 API...`);
+          const dgRes = await transcribeWithDeepgram(buffer, file.type || "audio/mp3", deepgramApiKey);
+          if (dgRes && dgRes.transcript && dgRes.transcript.length > 0) {
+            console.log(`Deepgram Nova-2 successfully transcribed ${file.name} (${dgRes.transcript.length} turns)!`);
+            const transcribeTimeMs = Date.now() - routeStartTime;
+            const transcribeTimeSec = Math.round(transcribeTimeMs / 100) / 10;
+            const today = new Date();
+            const formattedToday = today.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+            const formattedIso = today.toISOString().split("T")[0];
+            const calculatedDurationSec = dgRes.durationSec || serverParsedDurationSec || durationSec || 105;
+            const mins = Math.floor(calculatedDurationSec / 60);
+            const secs = Math.round(calculatedDurationSec % 60);
+            const formattedDuration = mins > 0 ? (secs > 0 ? `${mins} min ${secs} sec` : `${mins} min`) : `${secs} sec`;
+
+            return NextResponse.json({
+              agentName: "Mike Ross",
+              date: formattedToday,
+              dateStr: formattedIso,
+              duration: formattedDuration,
+              durationSec: calculatedDurationSec,
+              language: dgRes.language || "English",
+              transcript: dgRes.transcript,
+              transcribeTimeMs,
+              transcribeTimeSec,
+              transcribeTokens: 0,
+              tokensUsed: 0,
+              evaluation: null,
+              qaAnalysis: null,
+              audioUrl
+            });
+          }
+        } catch (dgErr) {
+          console.warn("Deepgram Nova-2 transcription failed, falling back to Groq...", dgErr);
+        }
+      }
+
+      // 2. Groq Whisper API Transcriber (100% FREE, Ultra-Fast 200x speed)
       const groqApiKey = process.env.GROQ_API_KEY;
       if (groqApiKey) {
         try {
@@ -812,6 +978,7 @@ CRITICAL TIMESTAMP RULES:
 4. If a turn occurs at 42 seconds and 47 centiseconds (42.47s), the timestamp MUST be "00:00:42" (NOT "00:42:47").
 5. If a turn occurs at 1 minute and 10 seconds (70.15s), the timestamp MUST be "00:01:10" (NOT "01:10:15").
 6. Always format the hours:minutes:seconds accurately relative to the start of the audio file.
+7. CRITICAL: Timestamps MUST accurately reflect the exact playback time (hh:mm:ss) of when each speaker begins speaking relative to the absolute start of the audio file (00:00:00). Do NOT add arbitrary offsets.
 
 Identify the agentName (e.g. from the greeting). Match it to the official pseudo name list. If no name is mentioned, use "Adam Miller".
 
@@ -820,7 +987,7 @@ You must return your output ONLY in a valid JSON object matching the following s
   "agentName": "Adam Miller",
   "language": "English (India)",
   "transcript": [
-    { "time": "00:00:05", "speaker": "Agent", "text": "verbatim text spoken here" },
+    { "time": "00:00:00", "speaker": "Agent", "text": "verbatim text spoken here" },
     { "time": "00:00:15", "speaker": "Silence", "text": "[Silence for 15 seconds]" },
     { "time": "00:00:30", "speaker": "Customer", "text": "verbatim text spoken here" }
   ]
