@@ -2049,8 +2049,8 @@ export default function TranscriptPage() {
                               {message.words && Array.isArray(message.words) && message.words.length > 0 ? (
                                 <span className={styles.wordContainer}>
                                   {message.words.map((w: any, wIdx: number) => {
-                                    const isTurnInWindow = isPlaying && currentTime >= (message.startSec - 1) && currentTime <= (message.endSec + 1);
-                                    const isWordActive = isTurnInWindow && currentTime >= (w.start - 0.1) && currentTime <= (w.end + 0.35);
+                                    const isTurnInWindow = !message.startSec || (currentTime >= (message.startSec - 2) && currentTime <= (message.endSec + 2));
+                                    const isWordActive = isTurnInWindow && currentTime >= (w.start - 0.15) && currentTime <= (w.end + 0.35);
                                     return (
                                       <span
                                         key={wIdx}
