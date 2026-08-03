@@ -742,6 +742,12 @@ export default function TranscriptPage() {
   const startEditing = (index: number, currentText: string) => {
     setEditingIndex(index);
     setEditingText(currentText);
+    if (isPlaying) {
+      setIsPlaying(false);
+      if (audioRef.current) {
+        audioRef.current.pause();
+      }
+    }
   };
 
   const cancelEditing = () => {
@@ -1625,7 +1631,7 @@ export default function TranscriptPage() {
                       ref={idx === activeIndex ? activeRowRef : null}
                       className={`${styles.transcriptRow} ${isSilence ? styles.silenceRow : ""} ${idx === activeIndex ? styles.activeRow : ""}`}
                       onClick={() => {
-                        if (isSilence) return;
+                        if (isSilence || editingIndex !== null) return;
                         const targetSeconds = timeStringToSeconds(message.time);
                         setCurrentTime(targetSeconds);
                         if (audioRef.current && hasRealAudio) {
@@ -1656,7 +1662,7 @@ export default function TranscriptPage() {
 
                       <div className={styles.textCell}>
                         {editingIndex === idx ? (
-                          <div className={styles.editContainer}>
+                          <div className={styles.editContainer} onClick={(e) => e.stopPropagation()}>
                             <textarea
                               rows={4}
                               value={editingText}
