@@ -1656,20 +1656,26 @@ export default function TranscriptPage() {
 
                       <div className={styles.textCell}>
                         {editingIndex === idx ? (
-                          <div style={{ display: "flex", gap: "8px", width: "100%" }}>
-                            <input
-                              type="text"
+                          <div className={styles.editContainer}>
+                            <textarea
+                              rows={4}
                               value={editingText}
                               onChange={(e) => setEditingText(e.target.value)}
-                              className={styles.transcriptEditInput}
+                              className={styles.transcriptEditTextarea}
                               autoFocus
+                              placeholder="Edit transcript dialogue..."
                               onKeyDown={(e) => {
-                                if (e.key === "Enter") saveEditing(idx);
+                                if (e.key === "Enter" && !e.shiftKey) {
+                                  e.preventDefault();
+                                  saveEditing(idx);
+                                }
                                 if (e.key === "Escape") cancelEditing();
                               }}
                             />
-                            <button className={styles.saveEditBtn} onClick={() => saveEditing(idx)}>Save</button>
-                            <button className={styles.cancelEditBtn} onClick={cancelEditing}>Cancel</button>
+                            <div className={styles.editActions}>
+                              <button className={styles.saveEditBtn} onClick={() => saveEditing(idx)}>Save</button>
+                              <button className={styles.cancelEditBtn} onClick={cancelEditing}>Cancel</button>
+                            </div>
                           </div>
                         ) : (
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
