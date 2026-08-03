@@ -131,9 +131,7 @@ async function prewarmAudioCache(
 
     // Fetch and decode ONLY if not already cached
     if (currentAudioCallId !== callId || !audioBuffer) {
-      const proxyUrl = audioUrl.startsWith("http") && !audioUrl.includes("/api/audio")
-        ? `/api/audio?url=${encodeURIComponent(audioUrl)}`
-        : audioUrl;
+      const proxyUrl = audioUrl;
       const response = await fetch(proxyUrl);
       const arrayBuffer = await response.arrayBuffer();
       audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
@@ -486,9 +484,7 @@ export default function TranscriptPage() {
   const handleDownloadAudio = async () => {
     if (!audioSrc) return;
     try {
-      const proxyUrl = audioSrc.startsWith("http") && !audioSrc.includes("/api/audio")
-        ? `/api/audio?url=${encodeURIComponent(audioSrc)}`
-        : audioSrc;
+      const proxyUrl = audioSrc;
 
       if (deletedTimeRangesRef.current.length > 0) {
         const res = await fetch(proxyUrl);
@@ -612,9 +608,7 @@ export default function TranscriptPage() {
             
             // Imperatively set initial uncut audio source instantly so player isn't empty!
             if (audioRef.current) {
-              const proxyUrl = audioFileUrl.startsWith("http") && !audioFileUrl.includes("/api/audio")
-                ? `/api/audio?url=${encodeURIComponent(audioFileUrl)}`
-                : audioFileUrl;
+              const proxyUrl = audioFileUrl;
               audioRef.current.src = proxyUrl;
               audioRef.current.load();
             }
@@ -918,9 +912,7 @@ export default function TranscriptPage() {
           const audioCtx = new AudioContextClass();
 
           if (!currentBuffer) {
-            const proxyUrl = audioSrc.startsWith("http") && !audioSrc.includes("/api/audio")
-              ? `/api/audio?url=${encodeURIComponent(audioSrc)}`
-              : audioSrc;
+            const proxyUrl = audioSrc;
             const response = await fetch(proxyUrl);
             const arrayBuffer = await response.arrayBuffer();
             currentBuffer = await audioCtx.decodeAudioData(arrayBuffer);
@@ -1235,9 +1227,7 @@ export default function TranscriptPage() {
       
       // Fetch and decode original if not in cache (first time)
       if (!audioBuffer || currentAudioCallId !== activeCallId) {
-        const proxyUrl = audioSrc.startsWith("http") && !audioSrc.includes("/api/audio")
-          ? `/api/audio?url=${encodeURIComponent(audioSrc)}`
-          : audioSrc;
+        const proxyUrl = audioSrc;
         const response = await fetch(proxyUrl);
         const arrayBuffer = await response.arrayBuffer();
         const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
