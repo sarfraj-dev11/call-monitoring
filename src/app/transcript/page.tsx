@@ -131,7 +131,9 @@ async function prewarmAudioCache(
 
     // Fetch and decode ONLY if not already cached
     if (currentAudioCallId !== callId || !audioBuffer) {
-      const proxyUrl = audioUrl;
+      const proxyUrl = audioUrl.startsWith("http") && !audioUrl.includes("/api/audio")
+        ? `/api/audio?url=${encodeURIComponent(audioUrl)}`
+        : audioUrl;
       const response = await fetch(proxyUrl);
       const arrayBuffer = await response.arrayBuffer();
       audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
@@ -213,6 +215,8 @@ export default function TranscriptPage() {
   const [audioSrc, setAudioSrc] = useState<string>("");
   const [hasRealAudio, setHasRealAudio] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isAudioBuffering, setIsAudioBuffering] = useState(false);
+  const [audioErrorMessage, setAudioErrorMessage] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [durationSec, setDurationSec] = useState(105);
 
@@ -484,7 +488,9 @@ export default function TranscriptPage() {
   const handleDownloadAudio = async () => {
     if (!audioSrc) return;
     try {
-      const proxyUrl = audioSrc;
+      const proxyUrl = audioSrc.startsWith("http") && !audioSrc.includes("/api/audio")
+        ? `/api/audio?url=${encodeURIComponent(audioSrc)}`
+        : audioSrc;
 
       if (deletedTimeRangesRef.current.length > 0) {
         const res = await fetch(proxyUrl);
@@ -559,7 +565,12 @@ export default function TranscriptPage() {
         setHasData(true);
         const activeCall = { id: docSnap.id, ...docSnap.data() } as any;
         const initialTranscript = activeCall.transcript || [];
-        setTranscriptData(initialTranscript);
+        setTranscriptData((prev) => {
+          if (JSON.stringify(initialTranscript) !== JSON.stringify(prev)) {
+            return initialTranscript;
+          }
+          return prev;
+        });
         setMetadata([
           { label: "Call ID", value: activeCall.id, highlight: true },
           { label: "Agent", value: activeCall.agent || "AI Agent" },
@@ -608,29 +619,33 @@ export default function TranscriptPage() {
             
             // Imperatively set initial uncut audio source instantly so player isn't empty!
             if (audioRef.current) {
-              const proxyUrl = audioFileUrl;
+              const proxyUrl = audioFileUrl.startsWith("http") && !audioFileUrl.includes("/api/audio")
+                ? `/api/audio?url=${encodeURIComponent(audioFileUrl)}`
+                : audioFileUrl;
               audioRef.current.src = proxyUrl;
               audioRef.current.load();
             }
           }
           setHasRealAudio(true);
 
-          // ⚡ Pre-warm audio cache & apply saved cuts on refresh so audio cut persists!
-          setTimeout(() => {
-            prewarmAudioCache(audioFileUrl!, activeId!, savedRanges, (trimmedUrl) => {
-              if (audioRef.current) {
-                const isCurrentlyPlaying = isPlaying || !audioRef.current.paused;
-                audioRef.current.src = trimmedUrl;
-                audioRef.current.load();
-                if (isCurrentlyPlaying) audioRef.current.play().catch(() => {});
-              }
-              if (wavesurferRef.current) {
-                try {
-                  Promise.resolve(wavesurferRef.current.load(trimmedUrl)).catch(() => {});
-                } catch (e) {}
-              }
-            });
-          }, 300);
+          // Only pre-warm audio cache if there are actual cut ranges to apply, preventing heavy RAM decode locks!
+          if (savedRanges && savedRanges.length > 0) {
+            setTimeout(() => {
+              prewarmAudioCache(audioFileUrl!, activeId!, savedRanges, (trimmedUrl) => {
+                if (audioRef.current) {
+                  const isCurrentlyPlaying = isPlaying || !audioRef.current.paused;
+                  audioRef.current.src = trimmedUrl;
+                  audioRef.current.load();
+                  if (isCurrentlyPlaying) audioRef.current.play().catch(() => {});
+                }
+                if (wavesurferRef.current) {
+                  try {
+                    Promise.resolve(wavesurferRef.current.load(trimmedUrl)).catch(() => {});
+                  } catch (e) {}
+                }
+              });
+            }, 300);
+          }
         } else {
           setAudioSrc("");
           setHasRealAudio(false);
@@ -912,7 +927,9 @@ export default function TranscriptPage() {
           const audioCtx = new AudioContextClass();
 
           if (!currentBuffer) {
-            const proxyUrl = audioSrc;
+            const proxyUrl = audioSrc.startsWith("http") && !audioSrc.includes("/api/audio")
+              ? `/api/audio?url=${encodeURIComponent(audioSrc)}`
+              : audioSrc;
             const response = await fetch(proxyUrl);
             const arrayBuffer = await response.arrayBuffer();
             currentBuffer = await audioCtx.decodeAudioData(arrayBuffer);
@@ -1227,7 +1244,9 @@ export default function TranscriptPage() {
       
       // Fetch and decode original if not in cache (first time)
       if (!audioBuffer || currentAudioCallId !== activeCallId) {
-        const proxyUrl = audioSrc;
+        const proxyUrl = audioSrc.startsWith("http") && !audioSrc.includes("/api/audio")
+          ? `/api/audio?url=${encodeURIComponent(audioSrc)}`
+          : audioSrc;
         const response = await fetch(proxyUrl);
         const arrayBuffer = await response.arrayBuffer();
         const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
@@ -1340,21 +1359,62 @@ export default function TranscriptPage() {
     loadCallData(id);
   };
 
+  // Safety timeout to prevent spinner from ever getting stuck for > 5 seconds
+  useEffect(() => {
+    let timer: any = null;
+    if (isAudioBuffering) {
+      timer = setTimeout(() => {
+        setIsAudioBuffering(false);
+        if (!audioRef.current || audioRef.current.paused) {
+          setIsPlaying(false);
+          setAudioErrorMessage("Audio buffer timeout. Stream failed to start within 5 seconds.");
+        }
+      }, 5000);
+    }
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+  }, [isAudioBuffering]);
+
+  const handleAudioError = (e: any) => {
+    setIsAudioBuffering(false);
+    setIsPlaying(false);
+    const mediaErr = audioRef.current?.error;
+    let msg = "Unable to play audio stream.";
+    if (mediaErr) {
+      if (mediaErr.code === 1) msg = "Audio playback aborted.";
+      else if (mediaErr.code === 2) msg = "Network error: Failed to download audio stream.";
+      else if (mediaErr.code === 3) msg = "Audio decoding error: File format may be corrupted.";
+      else if (mediaErr.code === 4) msg = "Audio resource or URL not accessible/supported.";
+    }
+    setAudioErrorMessage(msg);
+  };
+
   // Sync state with HTML5 audio
   useEffect(() => {
     if (!hasRealAudio || !audioRef.current) return;
     if (isPlaying) {
+      setIsAudioBuffering(true);
+      setAudioErrorMessage(null);
       const promise = audioRef.current.play();
       if (promise !== undefined) {
-        promise.catch(e => {
-          if (e.name !== "AbortError") {
-            console.error("Audio play error:", e);
-          }
-        });
+        promise
+          .then(() => {
+            setIsAudioBuffering(false);
+          })
+          .catch(e => {
+            setIsAudioBuffering(false);
+            if (e.name !== "AbortError") {
+              setIsPlaying(false);
+              console.error("Audio play error:", e);
+              setAudioErrorMessage(e.message || "Failed to start audio playback.");
+            }
+          });
       }
     } else {
       try {
         audioRef.current.pause();
+        setIsAudioBuffering(false);
       } catch (e) {}
     }
   }, [isPlaying, hasRealAudio]);
@@ -1623,11 +1683,22 @@ export default function TranscriptPage() {
               {hasRealAudio && (
                 <audio
                   ref={audioRef}
-                  crossOrigin="anonymous"
+                  src={
+                    audioSrc.startsWith("http") && !audioSrc.includes("/api/audio")
+                      ? `/api/audio?url=${encodeURIComponent(audioSrc)}`
+                      : (audioSrc.startsWith("/uploads/")
+                        ? `/api/audio?file=${audioSrc.replace("/uploads/", "")}`
+                        : audioSrc)
+                  }
                   onTimeUpdate={handleAudioTimeUpdate}
                   onLoadedMetadata={handleAudioLoadedMetadata}
                   onEnded={handleAudioEnded}
+                  onWaiting={() => setIsAudioBuffering(true)}
+                  onCanPlay={() => { setIsAudioBuffering(false); setAudioErrorMessage(null); }}
+                  onPlaying={() => { setIsAudioBuffering(false); setAudioErrorMessage(null); }}
+                  onError={handleAudioError}
                   style={{ display: "none" }}
+                  preload="auto"
                 />
               )}
 
@@ -1648,8 +1719,26 @@ export default function TranscriptPage() {
                     className={styles.playButton} 
                     onClick={handlePlayPause}
                     aria-label={isPlaying ? "Pause" : "Play"}
+                    disabled={isAudioBuffering}
+                    style={{ opacity: isAudioBuffering ? 0.8 : 1 }}
                   >
-                    {isPlaying ? <PauseIcon /> : <PlayIcon />}
+                    {isAudioBuffering ? (
+                      <span 
+                        style={{ 
+                          display: "inline-block", 
+                          width: "14px", 
+                          height: "14px", 
+                          border: "2px solid #ffffff", 
+                          borderTopColor: "transparent", 
+                          borderRadius: "50%", 
+                          animation: "spin 0.8s linear infinite" 
+                        }} 
+                      />
+                    ) : isPlaying ? (
+                      <PauseIcon />
+                    ) : (
+                      <PlayIcon />
+                    )}
                   </button>
 
                   {/* Fast-Forward +10s */}
@@ -1770,6 +1859,36 @@ export default function TranscriptPage() {
                   )}
                 </div>
               </div>
+
+              {/* Audio Playback Error Alert Banner */}
+              {audioErrorMessage && (
+                <div style={{
+                  padding: "10px 16px",
+                  background: "#fee2e2",
+                  border: "1px solid #fca5a5",
+                  color: "#b91c1c",
+                  borderRadius: "8px",
+                  fontSize: "12px",
+                  fontWeight: 500,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginTop: "12px",
+                  boxShadow: "0 2px 8px rgba(239, 68, 68, 0.15)"
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <span style={{ fontSize: "14px" }}>⚠️</span>
+                    <span><strong>Audio Playback Notice:</strong> {audioErrorMessage}</span>
+                  </div>
+                  <button 
+                    onClick={() => setAudioErrorMessage(null)} 
+                    style={{ background: "transparent", border: "none", color: "#b91c1c", cursor: "pointer", fontSize: "14px", fontWeight: 700, padding: "0 4px" }}
+                    title="Dismiss"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
             </section>
 
             {/* Full Transcript Area */}
@@ -1916,7 +2035,8 @@ export default function TranscriptPage() {
                               {message.words && Array.isArray(message.words) && message.words.length > 0 ? (
                                 <span className={styles.wordContainer}>
                                   {message.words.map((w: any, wIdx: number) => {
-                                    const isWordActive = isPlaying && currentTime >= w.start && currentTime <= w.end;
+                                    const isTurnInWindow = isPlaying && currentTime >= (message.startSec - 1) && currentTime <= (message.endSec + 1);
+                                    const isWordActive = isTurnInWindow && currentTime >= w.start && currentTime <= w.end;
                                     return (
                                       <span
                                         key={wIdx}

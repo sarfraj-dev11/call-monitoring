@@ -698,8 +698,16 @@ export default function Home() {
         let audioUrl = "";
         let useJsonBody = false;
 
-        // If file > 4MB (like long 90-min calls), upload directly to Firebase Storage first to bypass Vercel 4.5MB serverless limit
-        if (file.size > 4 * 1024 * 1024) {
+        const isLocalhost = typeof window !== "undefined" && (
+          window.location.hostname === "localhost" ||
+          window.location.hostname === "127.0.0.1" ||
+          window.location.hostname.endsWith(".local")
+        );
+
+        // On Vercel production, ALWAYS upload audio directly to Firebase Storage first.
+        // This guarantees zero audio bytes pass through Vercel serverless functions, completely bypassing Vercel payload limits!
+        // On localhost, Next.js server accepts up to 100MB directly for instant local disk playback!
+        if (!isLocalhost) {
           try {
             console.log(`File size is ${(file.size / (1024 * 1024)).toFixed(1)}MB (>4MB). Uploading to Firebase Storage to bypass Vercel 4.5MB payload limit...`);
             const storageRef = ref(storage, `uploads/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.-]/g, "_")}`);
@@ -809,7 +817,7 @@ export default function Home() {
         }
 
         const responseData = data;
-        const finalAudioUrl = responseData.audioUrl || "";
+        const finalAudioUrl = audioUrl || responseData.audioUrl || "";
         sessionStorage.setItem("active_audio_blob_url", finalAudioUrl);
 
         setUploadProgress(100);
@@ -855,8 +863,19 @@ export default function Home() {
         // Save new call immediately to Firestore cloud database!
         try {
           await setDoc(doc(db, "calls", newCall.id), newCall);
-          localStorage.setItem("active_call_id", newCall.id);
-          localStorage.setItem("last_call_analysis", JSON.stringify(data));
+          try {
+            localStorage.setItem("active_call_id", newCall.id);
+            // Omit heavy word timestamps for localStorage cache to prevent QuotaExceededError on 90+ min calls
+            const lightData = {
+              ...data,
+              transcript: Array.isArray(data.transcript)
+                ? data.transcript.map(({ words, ...rest }: any) => rest)
+                : data.transcript
+            };
+            localStorage.setItem("last_call_analysis", JSON.stringify(lightData));
+          } catch (lsErr) {
+            console.warn("localStorage quota exceeded for cache, relying on Firestore cloud storage:", lsErr);
+          }
         } catch (fsErr) {
           console.error("Failed to save new call to Firestore:", fsErr);
         }

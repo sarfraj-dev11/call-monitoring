@@ -388,6 +388,8 @@
   padding: 8px 12px;
   margin-left: -12px;
   margin-right: -12px;
+  content-visibility: auto;
+  contain-intrinsic-size: 0 60px;
 }
 
 .transcriptRow:not(.silenceRow):hover {

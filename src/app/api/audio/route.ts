@@ -9,7 +9,32 @@ export async function GET(request: Request) {
     const remoteUrl = searchParams.get("url");
 
     if (remoteUrl) {
-      return NextResponse.redirect(remoteUrl, 307);
+      try {
+        const range = request.headers.get("range");
+        const fetchHeaders: Record<string, string> = {};
+        if (range) fetchHeaders["range"] = range;
+
+        const remoteRes = await fetch(remoteUrl, { headers: fetchHeaders });
+        
+        const responseHeaders = new Headers();
+        const headersToPass = ["content-type", "content-length", "content-range", "accept-ranges"];
+        headersToPass.forEach(h => {
+          const val = remoteRes.headers.get(h);
+          if (val) responseHeaders.set(h, val);
+        });
+
+        responseHeaders.set("Access-Control-Allow-Origin", "*");
+        responseHeaders.set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+        responseHeaders.set("Cache-Control", "public, max-age=3600");
+
+        return new NextResponse(remoteRes.body, {
+          status: remoteRes.status,
+          headers: responseHeaders
+        });
+      } catch (e: any) {
+        console.error("Remote audio proxy error:", e);
+        return NextResponse.json({ error: "Failed to stream remote audio URL" }, { status: 500 });
+      }
     }
 
     if (!fileName) {
