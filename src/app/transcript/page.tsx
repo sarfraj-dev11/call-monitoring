@@ -827,29 +827,28 @@ export default function TranscriptPage() {
       const shifted = prevTranscript.map((message) => {
         let words = message.words ? [...message.words] : undefined;
         if (words && Array.isArray(words) && words.length > 0) {
-          for (const range of sortedRangesAsc) {
-            const cutStart = range.start;
-            const cutEnd = range.end;
-            const cutDuration = cutEnd - cutStart;
+          // Filter out words that are entirely inside any cut range
+          words = words.filter((w: any) => {
+            return !sortedRangesAsc.some(range => w.start >= (range.start - 0.01) && w.end <= (range.end + 0.01));
+          });
 
-            words = words
-              .filter((w: any) => !(w.start >= (cutStart - 0.01) && w.end <= (cutEnd + 0.01)))
-              .map((w: any) => {
-                if (w.start >= cutEnd) {
-                  return {
-                    ...w,
-                    start: Math.max(0, Number((w.start - cutDuration).toFixed(3))),
-                    end: Math.max(0, Number((w.end - cutDuration).toFixed(3)))
-                  };
-                } else if (w.start < cutStart && w.end > cutStart) {
-                  return {
-                    ...w,
-                    end: cutStart
-                  };
-                }
-                return w;
-              });
-          }
+          // Shift remaining words cumulatively
+          words = words.map((w: any) => {
+            let shiftStart = 0;
+            let shiftEnd = 0;
+            for (const range of sortedRangesAsc) {
+              if (w.start >= range.end) shiftStart += (range.end - range.start);
+              else if (w.start > range.start) shiftStart += (w.start - range.start);
+
+              if (w.end >= range.end) shiftEnd += (range.end - range.start);
+              else if (w.end > range.start) shiftEnd += (w.end - range.start);
+            }
+            return {
+              ...w,
+              start: Math.max(0, Number((w.start - shiftStart).toFixed(3))),
+              end: Math.max(0, Number((w.end - shiftEnd).toFixed(3)))
+            };
+          });
         }
 
         let newTimeSec = timeStringToSeconds(message.time);
@@ -1304,6 +1303,25 @@ export default function TranscriptPage() {
       if (timer) clearInterval(timer);
     };
   }, [isPlaying, hasRealAudio, durationSec]);
+
+  useEffect(() => {
+    let animationFrameId: number;
+
+    const updateTime = () => {
+      if (audioRef.current && hasRealAudio && isPlaying) {
+        setCurrentTime(audioRef.current.currentTime);
+        animationFrameId = requestAnimationFrame(updateTime);
+      }
+    };
+
+    if (isPlaying && hasRealAudio) {
+      animationFrameId = requestAnimationFrame(updateTime);
+    }
+
+    return () => {
+      if (animationFrameId) cancelAnimationFrame(animationFrameId);
+    };
+  }, [isPlaying, hasRealAudio]);
 
   const handlePlayPause = () => {
     setIsPlaying(!isPlaying);
@@ -1804,7 +1822,7 @@ export default function TranscriptPage() {
                               {message.words && Array.isArray(message.words) && message.words.length > 0 ? (
                                 <span className={styles.wordContainer}>
                                   {message.words.map((w: any, wIdx: number) => {
-                                    const isWordActive = isPlaying && currentTime >= (w.start - 0.05) && currentTime <= (w.end + 0.15);
+                                    const isWordActive = isPlaying && currentTime >= w.start && currentTime <= w.end;
                                     return (
                                       <span
                                         key={wIdx}
