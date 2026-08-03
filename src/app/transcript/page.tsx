@@ -818,6 +818,71 @@ export default function TranscriptPage() {
   };
 
   const processAudioCuts = async (rangesToCut: Array<{start: number, end: number}>) => {
+    if (!rangesToCut || rangesToCut.length === 0) return;
+
+    // 1. Shift word timestamps and turn timestamps for all words after cut regions
+    const sortedRangesAsc = [...rangesToCut].sort((a, b) => a.start - b.start);
+    
+    setTranscriptData((prevTranscript) => {
+      const shifted = prevTranscript.map((message) => {
+        let words = message.words ? [...message.words] : undefined;
+        if (words && Array.isArray(words) && words.length > 0) {
+          for (const range of sortedRangesAsc) {
+            const cutStart = range.start;
+            const cutEnd = range.end;
+            const cutDuration = cutEnd - cutStart;
+
+            words = words
+              .filter((w: any) => !(w.start >= (cutStart - 0.01) && w.end <= (cutEnd + 0.01)))
+              .map((w: any) => {
+                if (w.start >= cutEnd) {
+                  return {
+                    ...w,
+                    start: Math.max(0, Number((w.start - cutDuration).toFixed(3))),
+                    end: Math.max(0, Number((w.end - cutDuration).toFixed(3)))
+                  };
+                } else if (w.start < cutStart && w.end > cutStart) {
+                  return {
+                    ...w,
+                    end: cutStart
+                  };
+                }
+                return w;
+              });
+          }
+        }
+
+        let newTimeSec = timeStringToSeconds(message.time);
+        if (words && words.length > 0) {
+          newTimeSec = words[0].start;
+        } else {
+          for (const range of sortedRangesAsc) {
+            if (newTimeSec >= range.end) {
+              newTimeSec = Math.max(0, newTimeSec - (range.end - range.start));
+            }
+          }
+        }
+
+        const secs = Math.floor(newTimeSec || 0);
+        const hrs = Math.floor(secs / 3600);
+        const mins = Math.floor((secs % 3600) / 60);
+        const remSecs = secs % 60;
+        const formattedTime = `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(remSecs).padStart(2, '0')}`;
+
+        return {
+          ...message,
+          time: formattedTime,
+          words: words && words.length > 0 ? words : undefined
+        };
+      });
+
+      isLocalUpdateRef.current = true;
+      pushToHistory(shifted);
+      persistTranscriptToDatabase(shifted);
+      return shifted;
+    });
+
+    // 2. Perform Web Audio API physical audio buffer cutting & waveform graph refresh
     rangesToCut.sort((a, b) => b.start - a.start);
     deletedTimeRangesRef.current.push(...rangesToCut);
     setDeletedRangesState([...deletedTimeRangesRef.current]);
