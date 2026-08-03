@@ -634,3 +634,34 @@
   background: #e4e4e7;
   color: #18181b;
 }
+
+/* Word-by-word Karaoke Highlight Styles */
+.wordContainer {
+  display: inline;
+  line-height: 1.8;
+}
+
+.wordItem {
+  display: inline-block;
+  padding: 2px 5px;
+  margin: 0 1px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.wordItem:hover {
+  background-color: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
+}
+
+.activeWordItem {
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%) !important;
+  color: #ffffff !important;
+  font-weight: 700 !important;
+  border-radius: 5px;
+  padding: 2px 7px;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.45);
+  transform: scale(1.08);
+  display: inline-block;
+}
