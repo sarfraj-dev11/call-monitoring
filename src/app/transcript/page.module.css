@@ -352,6 +352,7 @@
 
 /* Transcript Scroll Timeline */
 .transcriptScrollContainer {
+  position: relative;
   overflow-y: auto;
   display: flex;
   flex-direction: column;

@@ -1414,13 +1414,26 @@ export default function TranscriptPage() {
   };
 
   useEffect(() => {
-    if (activeRowRef.current) {
-      activeRowRef.current.scrollIntoView({
-        behavior: "smooth",
-        block: "nearest"
-      });
+    if (activeRowRef.current && isPlaying) {
+      const row = activeRowRef.current;
+      const container = row.closest(`.${styles.transcriptScrollContainer}`) as HTMLElement;
+      if (container) {
+        const rowTop = row.offsetTop;
+        const rowBottom = rowTop + row.offsetHeight;
+        const containerTop = container.scrollTop;
+        const containerBottom = containerTop + container.offsetHeight;
+
+        if (rowTop < containerTop || rowBottom > containerBottom) {
+          container.scrollTo({
+            top: rowTop - container.offsetHeight / 2 + row.offsetHeight / 2,
+            behavior: "smooth"
+          });
+        }
+      } else {
+        row.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
     }
-  }, [activeIndex]);
+  }, [activeIndex, isPlaying]);
 
   return (
     <div className={styles.appContainer}>
