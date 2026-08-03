@@ -18,7 +18,7 @@ export const OFFICIAL_PSEUDO_NAMES: string[] = [
 ];
 
 // Mapping of common speech-to-text (STT) phonetic misrecognitions / variants to official pseudo names
-const PSEUDO_NAME_VARIANTS: Record<string, string[]> = {
+export const PSEUDO_NAME_VARIANTS: Record<string, string[]> = {
   "Adam Miller": [
     "atom miller",
     "attam miller",
@@ -28,6 +28,9 @@ const PSEUDO_NAME_VARIANTS: Record<string, string[]> = {
     "atom miler",
     "addam miler",
     "adam muller",
+    "adam",
+    "atom",
+    "addam",
   ],
   "David Scotts": [
     "david scott",
@@ -37,6 +40,8 @@ const PSEUDO_NAME_VARIANTS: Record<string, string[]> = {
     "dave scots",
     "david skotts",
     "david skott",
+    "david", // Defaults to David Scotts
+    "dave",
   ],
   "Mike Ross": [
     "mike rose",
@@ -44,6 +49,9 @@ const PSEUDO_NAME_VARIANTS: Record<string, string[]> = {
     "michael rose",
     "mike ros",
     "mikey ross",
+    "mike",
+    "michael",
+    "mikey",
   ],
   "Cassey Jones": [
     "casey jones",
@@ -54,12 +62,21 @@ const PSEUDO_NAME_VARIANTS: Record<string, string[]> = {
     "kc jones",
     "casee jones",
     "cassey jonas",
+    "cassey",
+    "casey",
+    "kasey",
+    "cassie",
+    "cassy",
+    "kassie",
   ],
   "Mark Anderson": [
     "marc anderson",
     "mark andersen",
     "marc andersen",
     "marck anderson",
+    "mark",
+    "marc",
+    "marck",
   ],
   "John Woods": [
     "jon woods",
@@ -67,6 +84,8 @@ const PSEUDO_NAME_VARIANTS: Record<string, string[]> = {
     "jon wood",
     "john woodes",
     "jon woodes",
+    "john",
+    "jon",
   ],
   "Suzzane Daves": [
     "suzanne daves",
@@ -78,6 +97,12 @@ const PSEUDO_NAME_VARIANTS: Record<string, string[]> = {
     "suzann daves",
     "suzy daves",
     "suzanne dave",
+    "suzzane",
+    "suzanne",
+    "suzan",
+    "susan",
+    "suzann",
+    "suzy",
   ],
   "Jared McAnn": [
     "jared mccann",
@@ -86,12 +111,15 @@ const PSEUDO_NAME_VARIANTS: Record<string, string[]> = {
     "jared macann",
     "jarod mcann",
     "jarred mccann",
+    "jared",
+    "jarred",
+    "jarod",
   ],
   "David White": [
-    "dave white",
     "david wight",
     "david whyte",
     "dave whyte",
+    // Note: "david" and "dave" map to David Scotts above.
   ],
   "Ron Williams": [
     "ron william",
@@ -99,6 +127,8 @@ const PSEUDO_NAME_VARIANTS: Record<string, string[]> = {
     "ronald william",
     "ron wiliams",
     "ron wilson",
+    "ron",
+    "ronald",
   ],
   "Richard Johnson": [
     "rich johnson",
@@ -106,28 +136,44 @@ const PSEUDO_NAME_VARIANTS: Record<string, string[]> = {
     "rick johnson",
     "richard jonson",
     "richard johnsen",
+    "richard",
+    "rich",
+    "richie",
+    "rick",
   ],
   "Eva Wilson": [
     "ava wilson",
     "eva willson",
     "eve wilson",
+    "eva",
+    "ava",
+    "eve",
   ],
   "Nathan Brown": [
     "nate brown",
     "nathan browne",
     "nate browne",
+    "nathan",
+    "nate",
   ],
   "Jenny White": [
     "jennie white",
     "jenney white",
     "jenny whyte",
     "jenni white",
+    "jenny",
+    "jennie",
+    "jenney",
+    "jenni",
   ],
   "George Anthony": [
     "george antony",
     "jorge anthony",
     "georg anthony",
     "george antoni",
+    "george",
+    "jorge",
+    "georg",
   ],
   "Lisa Johnson": [
     "liza johnson",
@@ -135,6 +181,9 @@ const PSEUDO_NAME_VARIANTS: Record<string, string[]> = {
     "liza jonson",
     "leeza johnson",
     "lisa johnsen",
+    "lisa",
+    "liza",
+    "leeza",
   ],
 };
 
@@ -226,4 +275,42 @@ export function replacePseudoNamesInText(text: string): string {
   }
 
   return correctedText;
+}
+
+/**
+ * Finds the official pseudo name that has the "most letters matching" 
+ * the transcribed text, checking against all phonetic variants and first names.
+ */
+export function findBestMatchingAgentName(text: string): string {
+  const lowerText = text.toLowerCase();
+  let bestName = "Adam Miller";
+  let maxScore = 0;
+
+  for (const officialName of OFFICIAL_PSEUDO_NAMES) {
+    let currentMaxScore = 0;
+    const variantsToCheck = [officialName.toLowerCase(), ...(PSEUDO_NAME_VARIANTS[officialName] || [])];
+    
+    for (const variant of variantsToCheck) {
+      if (lowerText.includes(variant)) {
+         currentMaxScore = Math.max(currentMaxScore, variant.length * 2); // Exact variant match = high score
+      } else {
+         // Substring match for partial matches
+         const parts = variant.split(' ');
+         let partScore = 0;
+         for (const part of parts) {
+           if (part.length > 2 && lowerText.includes(part)) {
+             partScore += part.length;
+           }
+         }
+         currentMaxScore = Math.max(currentMaxScore, partScore);
+      }
+    }
+    
+    if (currentMaxScore > maxScore) {
+      maxScore = currentMaxScore;
+      bestName = officialName;
+    }
+  }
+
+  return bestName;
 }

@@ -3,7 +3,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import * as mm from "music-metadata";
 import { safeParseJson } from "@/lib/jsonRepair";
-import { normalizeAgentName, replacePseudoNamesInText } from "@/lib/pseudoNames";
+import { normalizeAgentName, replacePseudoNamesInText, findBestMatchingAgentName } from "@/lib/pseudoNames";
 
 function formatSecondsToHms(seconds: number): string {
   const secs = Math.floor(seconds || 0);
@@ -62,12 +62,50 @@ async function transcribeWithDeepgram(buffer: Buffer, mimeType: string, deepgram
   }
 
   let agentSpeakerId = 0;
+  let aiIdentified = false;
+
   if (utterances.length > 0) {
-    for (let i = 0; i < Math.min(3, utterances.length); i++) {
-      const txt = (utterances[i].transcript || "").toLowerCase();
-      if (txt.includes("thank you for calling") || txt.includes("brocus") || txt.includes("my name is") || txt.includes("how can i help")) {
-        agentSpeakerId = utterances[i].speaker;
-        break;
+    // Collect the first 15 utterances for context
+    const contextLines = utterances.slice(0, 15).map((u: any) => `Speaker ${u.speaker}: ${u.transcript}`).join('\n');
+    
+    try {
+      const geminiApiKey = process.env.GEMINI_API_KEY;
+      if (geminiApiKey) {
+        const prompt = `Analyze this conversation transcript and determine which Speaker ID belongs to the Call Center Agent. Return ONLY the integer ID of the Agent speaker (e.g., 0, 1, or 2).\n\nTranscript:\n${contextLines}`;
+        
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey}`;
+        const aiRes = await fetch(geminiUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { temperature: 0.1, maxOutputTokens: 10 }
+          })
+        });
+        
+        if (aiRes.ok) {
+          const aiData = await aiRes.json();
+          const responseText = aiData.candidates?.[0]?.content?.parts?.[0]?.text || "";
+          const match = responseText.match(/\d+/);
+          if (match) {
+            agentSpeakerId = parseInt(match[0], 10);
+            aiIdentified = true;
+            console.log(`[Diarization] AI identified Agent as Speaker ${agentSpeakerId}`);
+          }
+        }
+      }
+    } catch (aiErr) {
+      console.warn("AI diarization failed, falling back to heuristic", aiErr);
+    }
+    
+    // Fallback heuristic if AI failed or API key missing
+    if (!aiIdentified) {
+      for (let i = 0; i < Math.min(5, utterances.length); i++) {
+        const txt = (utterances[i].transcript || "").toLowerCase();
+        if (txt.includes("thank you for calling") || txt.includes("brocus") || txt.includes("my name is") || txt.includes("how can i help")) {
+          agentSpeakerId = utterances[i].speaker;
+          break;
+        }
       }
     }
   }
@@ -91,8 +129,23 @@ async function transcribeWithDeepgram(buffer: Buffer, mimeType: string, deepgram
     };
   });
 
+  // Extract agent name by looking at Agent's lines using the "most letters matching" logic
+  let extractedAgentName = "Adam Miller"; // Default
+  let agentGreetingText = "";
+  for (const item of transcriptItems) {
+    if (item.speaker === "Agent") {
+      agentGreetingText += " " + item.text;
+      if (agentGreetingText.length > 300) break; // The first few sentences contain the name
+    }
+  }
+  
+  if (agentGreetingText.trim()) {
+    extractedAgentName = findBestMatchingAgentName(agentGreetingText);
+  }
+
   return {
     transcript: transcriptItems,
+    agentName: extractedAgentName,
     durationSec,
     language: data.results?.channels?.[0]?.detected_language || "English"
   };

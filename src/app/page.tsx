@@ -686,63 +686,16 @@ export default function Home() {
           console.error("Failed to get audio duration:", durErr);
         }
 
-        // Step 1: Direct Upload to Firebase Storage with Automatic CORS Proxy Fallback
-        setPipelineStep(1); // Uploading
-        let uploadedAudioUrl = "";
-
-        try {
-          if (isCancelledRef.current) break;
-          const cleanFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-          const storagePath = `calls/${Date.now()}_${cleanFileName}`;
-          const storageRef = ref(storage, storagePath);
-          const uploadTask = uploadBytesResumable(storageRef, file);
-          currentUploadTaskRef.current = uploadTask;
-
-          uploadedAudioUrl = await new Promise<string>((resolve, reject) => {
-            uploadTask.on(
-              "state_changed",
-              (snapshot) => {
-                const progress = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
-                setUploadProgress(progress);
-              },
-              (error) => {
-                console.warn("Client Firebase Storage upload notice (CORS/Network):", error);
-                reject(error);
-              },
-              async () => {
-                const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
-                resolve(downloadUrl);
-              }
-            );
-          });
-          currentUploadTaskRef.current = null;
-        } catch (corsErr) {
-          if (isCancelledRef.current) break;
-          console.log("Client upload encountered CORS/Network restriction. Falling back to server-side Firebase upload proxy...");
-          const uploadFormData = new FormData();
-          uploadFormData.append("file", file);
-
-          const proxyRes = await fetch("/api/upload-audio", {
-            method: "POST",
-            body: uploadFormData,
-            signal: abortControllerRef.current?.signal
-          });
-
-          if (!proxyRes.ok) {
-            const errText = await proxyRes.text();
-            throw new Error(`Upload failed: ${errText}`);
-          }
-
-          const proxyData = await proxyRes.json();
-          if (proxyData.error) throw new Error(proxyData.error);
-          uploadedAudioUrl = proxyData.audioUrl;
-          setUploadProgress(100);
-        }
-
+        // Step 1: Direct Upload & Transcribe to Local Server (Bypasses Firebase for instant speed)
+        setPipelineStep(1); // Uploading & Transcribing
+        
         if (isCancelledRef.current) break;
-        sessionStorage.setItem("active_audio_blob_url", uploadedAudioUrl);
 
-        // Step 2: Request transcription from server using tiny ~200 byte JSON payload containing Firebase Storage URL!
+        const uploadFormData = new FormData();
+        uploadFormData.append("file", file);
+        uploadFormData.append("durationSec", String(durationSec));
+
+        setUploadProgress(100);
         setPipelineStep(2); // Transcribing
 
         const transcribeStartMs = Date.now();
@@ -756,12 +709,7 @@ export default function Home() {
           try {
             response = await fetch("/api/transcribe", {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                audioUrl: uploadedAudioUrl,
-                fileName: file.name,
-                durationSec
-              }),
+              body: uploadFormData,
               signal: abortControllerRef.current?.signal
             });
 
@@ -812,6 +760,10 @@ export default function Home() {
           break;
         }
 
+        const responseData = data;
+        const finalAudioUrl = responseData.audioUrl || "";
+        sessionStorage.setItem("active_audio_blob_url", finalAudioUrl);
+
         setUploadProgress(100);
 
         if (!data || data.error) {
@@ -843,7 +795,7 @@ export default function Home() {
           transcript: data.transcript || [],
           evaluation: null,
           qaAnalysis: null,
-          audioUrl: uploadedAudioUrl,
+          audioUrl: finalAudioUrl,
           transcribeTimeSec,
           evaluateTimeSec: 0,
           totalProcessingTimeSec: transcribeTimeSec,

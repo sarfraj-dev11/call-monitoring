@@ -230,6 +230,9 @@ export default function TranscriptPage() {
   const isLocalUpdateRef = useRef(false);
   const deletedTimeRangesRef = useRef<Array<{ start: number; end: number }>>([]);
   const [deletedRangesState, setDeletedRangesState] = useState<Array<{ start: number; end: number }>>([]);
+  
+  // Cache decoded AudioBuffers for lightning fast instantaneous <1s edits!
+  const audioBufferCacheRef = useRef<Map<string, AudioBuffer>>(new Map());
 
   // Bulletproof Undo / Redo History Management using Refs + React State
   const historyStackRef = useRef<Array<{ transcript: any[]; audioSrc: string; deletedRanges?: any[] }>>([]);
@@ -324,12 +327,33 @@ export default function TranscriptPage() {
     const currentStack = historyStackRef.current;
     const currentIndex = historyIndexRef.current;
 
+    // 1. Memory Cleanup: If we are overriding future redo states, aggressively garbage collect them!
+    if (currentIndex >= 0 && currentIndex < currentStack.length - 1) {
+      const orphanedStates = currentStack.slice(currentIndex + 1);
+      orphanedStates.forEach(state => {
+        if (state.audioSrc && state.audioSrc.startsWith("blob:")) {
+          URL.revokeObjectURL(state.audioSrc);
+          audioBufferCacheRef.current.delete(state.audioSrc);
+        }
+      });
+    }
+
     const sliced = currentIndex >= 0 ? currentStack.slice(0, currentIndex + 1) : [];
-    const updated = [...sliced, {
+    let updated = [...sliced, {
       transcript: JSON.parse(JSON.stringify(newTranscript)),
       audioSrc: src,
       deletedRanges: JSON.parse(JSON.stringify(deletedTimeRangesRef.current))
     }];
+
+    // 2. Memory Cleanup: Limit history stack to 10 to prevent gigabytes of RAM usage
+    const MAX_HISTORY = 10;
+    while (updated.length > MAX_HISTORY) {
+      const oldestState = updated.shift(); // Remove the oldest state
+      if (oldestState && oldestState.audioSrc && oldestState.audioSrc.startsWith("blob:")) {
+        URL.revokeObjectURL(oldestState.audioSrc);
+        audioBufferCacheRef.current.delete(oldestState.audioSrc);
+      }
+    }
 
     historyStackRef.current = updated;
     historyIndexRef.current = updated.length - 1;
@@ -889,14 +913,19 @@ export default function TranscriptPage() {
     if (hasRealAudio && audioSrc) {
       setTimeout(async () => {
         try {
-          const proxyUrl = audioSrc.startsWith("http") && !audioSrc.includes("/api/audio")
-            ? `/api/audio?url=${encodeURIComponent(audioSrc)}`
-            : audioSrc;
-          const response = await fetch(proxyUrl);
-          const arrayBuffer = await response.arrayBuffer();
+          let currentBuffer = audioBufferCacheRef.current.get(audioSrc);
           const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
           const audioCtx = new AudioContextClass();
-          let currentBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+
+          if (!currentBuffer) {
+            const proxyUrl = audioSrc.startsWith("http") && !audioSrc.includes("/api/audio")
+              ? `/api/audio?url=${encodeURIComponent(audioSrc)}`
+              : audioSrc;
+            const response = await fetch(proxyUrl);
+            const arrayBuffer = await response.arrayBuffer();
+            currentBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+            audioBufferCacheRef.current.set(audioSrc, currentBuffer);
+          }
 
           for (const range of rangesToCut) {
              const sampleRate = currentBuffer.sampleRate;
@@ -921,6 +950,9 @@ export default function TranscriptPage() {
 
           const wavBlob = audioBufferToWavBlob(currentBuffer);
           const trimmedBlobUrl = URL.createObjectURL(wavBlob);
+          
+          // Cache the newly trimmed buffer so the NEXT cut is instant!
+          audioBufferCacheRef.current.set(trimmedBlobUrl, currentBuffer);
 
           setAudioSrc(trimmedBlobUrl);
           setHasBeenTrimmed(true);
@@ -963,9 +995,66 @@ export default function TranscriptPage() {
       } catch (e) {}
     }
 
+    const cachedBuffer = audioBufferCacheRef.current.get(audioSrc);
+    let precomputedPeaks: Array<Float32Array> | undefined = undefined;
+    let precomputedDuration: number | undefined = undefined;
+
+    if (cachedBuffer) {
+      const width = 8000; // High resolution chart width
+      const channelData = cachedBuffer.getChannelData(0);
+      const step = Math.ceil(channelData.length / width);
+      const peaksArray = new Float32Array(width);
+      for (let i = 0; i < width; i++) {
+        const start = i * step;
+        let max = 0;
+        for (let j = 0; j < step && (start + j) < channelData.length; j++) {
+          const val = Math.abs(channelData[start + j]);
+          if (val > max) max = val;
+        }
+        peaksArray[i] = max;
+      }
+      precomputedPeaks = [peaksArray];
+      precomputedDuration = cachedBuffer.duration;
+    } else if (durationSec > 0 && transcriptData && transcriptData.length > 0) {
+      // SYNTHETIC GONG.IO STYLE PEAKS (0.01s initial load!)
+      // Bypasses the 5-30s browser audio decoding process entirely.
+      const width = 8000;
+      const peaksArray = new Float32Array(width);
+      const timePerPixel = durationSec / width;
+      
+      transcriptData.forEach((turn: any) => {
+        let startSec = timeStringToSeconds(turn.time || "00:00:00");
+        let endSec = startSec + Math.max(1, (turn.text || "").split(' ').length * 0.4);
+
+        if (Array.isArray(turn.words) && turn.words.length > 0) {
+           startSec = turn.words[0].start;
+           endSec = turn.words[turn.words.length - 1].end;
+        }
+        
+        const startPixel = Math.max(0, Math.floor(startSec / timePerPixel));
+        const endPixel = Math.min(width - 1, Math.ceil(endSec / timePerPixel));
+        
+        for (let i = startPixel; i <= endPixel; i++) {
+          // Generate a dynamic visual bar for speech using a pseudo-random seed so it doesn't flicker
+          const pseudoRandom = (Math.sin(i * 9999) * 0.5 + 0.5); 
+          peaksArray[i] = 0.4 + (pseudoRandom * 0.5); 
+        }
+      });
+
+      // Fill empty silence pixels with a very small baseline
+      for (let i = 0; i < width; i++) {
+        if (peaksArray[i] === 0) peaksArray[i] = 0.05;
+      }
+      
+      precomputedPeaks = [peaksArray];
+      precomputedDuration = durationSec;
+    }
+
     const ws = WaveSurfer.create({
       container: waveformContainerRef.current,
       media: audioRef.current || undefined,
+      peaks: precomputedPeaks,
+      duration: precomputedDuration,
       waveColor: '#a7f3d0',
       progressColor: '#059669',
       cursorColor: '#ef4444',
@@ -1413,6 +1502,7 @@ export default function TranscriptPage() {
     });
   };
 
+  /*
   useEffect(() => {
     if (activeRowRef.current && isPlaying) {
       const row = activeRowRef.current;
@@ -1434,6 +1524,7 @@ export default function TranscriptPage() {
       }
     }
   }, [activeIndex, isPlaying]);
+  */
 
   return (
     <div className={styles.appContainer}>
