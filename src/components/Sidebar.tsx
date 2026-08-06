@@ -1,5 +1,8 @@
+"use client";
+
 import { useState, useEffect } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import styles from "./Sidebar.module.css";
 
 // SVG Icons
@@ -48,31 +51,77 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ activeKey }: SidebarProps) {
+  const router = useRouter();
   const [allCalls, setAllCalls] = useState<any[]>([]);
   const [activeCallId, setActiveCallId] = useState<string>("");
 
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      const stored = localStorage.getItem("all_calls_database");
-      if (stored) {
-        try {
-          const db = JSON.parse(stored);
-          setAllCalls(db);
-          
-          const activeId = localStorage.getItem("active_call_id") || (db[0]?.id || "");
-          setActiveCallId(activeId);
-        } catch (e) {
-          console.error("Failed to parse db in Sidebar", e);
+    const loadSidebarCalls = () => {
+      if (typeof window !== "undefined") {
+        const stored = localStorage.getItem("all_calls_database");
+        if (stored) {
+          try {
+            const db = JSON.parse(stored);
+            setAllCalls(db);
+            const searchId = new URLSearchParams(window.location.search).get("id");
+            const activeId = searchId || localStorage.getItem("active_call_id") || (db[0]?.id || "");
+            setActiveCallId(activeId);
+          } catch (e) {
+            console.error("Failed to parse db in Sidebar", e);
+          }
         }
       }
+    };
+
+    loadSidebarCalls();
+
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === "active_call_id" && e.newValue) {
+        setActiveCallId(e.newValue);
+      } else if (e.key === "all_calls_database") {
+        loadSidebarCalls();
+      }
+    };
+
+    let channel: BroadcastChannel | null = null;
+    if (typeof window !== "undefined" && "BroadcastChannel" in window) {
+      try {
+        channel = new BroadcastChannel("call_updates");
+        channel.onmessage = (msg) => {
+          if (msg.data?.type === "ACTIVE_CALL_CHANGED" && msg.data.callId) {
+            setActiveCallId(msg.data.callId);
+          } else {
+            loadSidebarCalls();
+          }
+        };
+      } catch (e) {}
     }
+
+    window.addEventListener("storage", handleStorage);
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+      if (channel) channel.close();
+    };
   }, []);
 
   const handleCallSelect = (id: string) => {
+    if (!id) return;
     localStorage.setItem("active_call_id", id);
     setActiveCallId(id);
     if (typeof window !== "undefined") {
-      window.location.reload();
+      if ("BroadcastChannel" in window) {
+        try {
+          const channel = new BroadcastChannel("call_updates");
+          channel.postMessage({ type: "ACTIVE_CALL_CHANGED", callId: id });
+          channel.close();
+        } catch (e) {}
+      }
+      
+      const currentPath = window.location.pathname;
+      const searchParams = new URLSearchParams(window.location.search);
+      if (searchParams.get("id") !== id) {
+        router.push(`${currentPath}?id=${encodeURIComponent(id)}`);
+      }
     }
   };
 

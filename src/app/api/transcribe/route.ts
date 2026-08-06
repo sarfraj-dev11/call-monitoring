@@ -3,7 +3,8 @@ import { promises as fs } from "fs";
 import path from "path";
 import * as mm from "music-metadata";
 import { safeParseJson } from "@/lib/jsonRepair";
-import { normalizeAgentName, replacePseudoNamesInText, findBestMatchingAgentName } from "@/lib/pseudoNames";
+import { normalizeAgentName, replacePseudoNamesInText, findBestMatchingAgentName, detectAgentNameFromTranscript } from "@/lib/pseudoNames";
+import { consolidateConsecutiveTurns } from "@/lib/callStore";
 
 function formatSecondsToHms(seconds: number): string {
   const secs = Math.floor(seconds || 0);
@@ -56,7 +57,7 @@ async function transcribeWithDeepgram(audioInput: Buffer | string, mimeType: str
         estSec += 6;
       }
       return {
-        transcript: transcriptItems,
+        transcript: consolidateConsecutiveTurns(transcriptItems),
         durationSec,
         language: data.results?.channels?.[0]?.detected_language || "English"
       };
@@ -146,7 +147,7 @@ async function transcribeWithDeepgram(audioInput: Buffer | string, mimeType: str
   }
 
   return {
-    transcript: transcriptItems,
+    transcript: consolidateConsecutiveTurns(transcriptItems),
     agentName: extractedAgentName,
     durationSec,
     language: data.results?.channels?.[0]?.detected_language || "English"
@@ -487,7 +488,7 @@ export async function POST(request: Request) {
                   duration: formattedDuration,
                   durationSec: calculatedDurationSec,
                   language: dgRes.language || "English",
-                  transcript: dgRes.transcript,
+                  transcript: consolidateConsecutiveTurns(dgRes.transcript),
                   transcribeTimeMs,
                   transcribeTimeSec,
                   transcribeTokens: 0,
@@ -587,13 +588,13 @@ export async function POST(request: Request) {
                   const formattedDuration = mins > 0 ? (secs > 0 ? `${mins} min ${secs} sec` : `${mins} min`) : `${secs} sec`;
 
                   return NextResponse.json({
-                    agentName: "Mike Ross",
+                    agentName: detectAgentNameFromTranscript(transcriptItems, "Unknown Agent"),
                     date: formattedToday,
                     dateStr: formattedIso,
                     duration: formattedDuration,
                     durationSec: calculatedDurationSec,
                     language: groqData.language || "English",
-                    transcript: transcriptItems,
+                    transcript: consolidateConsecutiveTurns(transcriptItems),
                     transcribeTimeMs,
                     transcribeTimeSec,
                     transcribeTokens: 0,
@@ -755,8 +756,9 @@ Return ONLY a single valid JSON object with this EXACT structure:
 
       const transcribeTimeMs = Date.now() - routeStartTime;
       const transcribeTimeSec = Math.round(transcribeTimeMs / 100) / 10;
-      const rawAgentName = parsedResult.agentName || "Adam Miller";
-      const finalAgentName = normalizeAgentName(rawAgentName);
+      const detectedName = detectAgentNameFromTranscript(processedTranscript);
+      const rawAgentName = parsedResult.agentName || "Unknown Agent";
+      const finalAgentName = detectedName !== "Unknown Agent" ? detectedName : normalizeAgentName(rawAgentName);
 
       return NextResponse.json({
         agentName: finalAgentName,
@@ -765,7 +767,7 @@ Return ONLY a single valid JSON object with this EXACT structure:
         duration: formattedDuration,
         durationSec,
         language: parsedResult.language || "English (India)",
-        transcript: processedTranscript,
+        transcript: consolidateConsecutiveTurns(processedTranscript),
         transcribeTimeMs,
         transcribeTimeSec,
         transcribeTokens,
@@ -829,7 +831,7 @@ Return ONLY a single valid JSON object with this EXACT structure:
             const formattedDuration = mins > 0 ? (secs > 0 ? `${mins} min ${secs} sec` : `${mins} min`) : `${secs} sec`;
 
             return NextResponse.json({
-              agentName: "Mike Ross",
+              agentName: detectAgentNameFromTranscript(dgRes.transcript, "Unknown Agent"),
               date: formattedToday,
               dateStr: formattedIso,
               duration: formattedDuration,
@@ -928,13 +930,13 @@ Return ONLY a single valid JSON object with this EXACT structure:
               const formattedDuration = mins > 0 ? (secs > 0 ? `${mins} min ${secs} sec` : `${mins} min`) : `${secs} sec`;
 
               return NextResponse.json({
-                agentName: "Mike Ross",
+                agentName: detectAgentNameFromTranscript(transcriptItems, "Unknown Agent"),
                 date: formattedToday,
                 dateStr: formattedIso,
                 duration: formattedDuration,
                 durationSec: calculatedDurationSec,
                 language: groqData.language || "English",
-                transcript: transcriptItems,
+                transcript: consolidateConsecutiveTurns(transcriptItems),
                 transcribeTimeMs,
                 transcribeTimeSec,
                 transcribeTokens: 0,
@@ -977,7 +979,7 @@ Return ONLY a single valid JSON object with this EXACT structure:
               duration: formattedDuration,
               durationSec: calculatedDurationSec,
               language: parsedWhisper.language || "English",
-              transcript: parsedWhisper.transcript,
+              transcript: consolidateConsecutiveTurns(parsedWhisper.transcript),
               transcribeTimeMs,
               transcribeTimeSec,
               transcribeTokens: 0,
@@ -1144,8 +1146,9 @@ You must return your output ONLY in a valid JSON object matching the following s
     const transcribeTimeMs = Date.now() - routeStartTime;
     const transcribeTimeSec = Math.round(transcribeTimeMs / 100) / 10;
 
-    const rawAgentName = finalResult.agentName || "Adam Miller";
-    const finalAgentName = normalizeAgentName(rawAgentName);
+    const detectedName = detectAgentNameFromTranscript(processedTranscript);
+    const rawAgentName = finalResult.agentName || "Unknown Agent";
+    const finalAgentName = detectedName !== "Unknown Agent" ? detectedName : normalizeAgentName(rawAgentName);
 
     const responseData = {
       agentName: finalAgentName,
@@ -1154,7 +1157,7 @@ You must return your output ONLY in a valid JSON object matching the following s
       duration: formattedDuration,
       durationSec: calculatedDurationSec,
       language: finalResult.language || "English (India)",
-      transcript: processedTranscript,
+      transcript: consolidateConsecutiveTurns(processedTranscript),
       transcribeTimeMs,
       transcribeTimeSec,
       transcribeTokens,

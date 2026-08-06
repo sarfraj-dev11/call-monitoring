@@ -58,7 +58,14 @@ export default function ReportsPage() {
 
   const handleCallClick = (id: string) => {
     localStorage.setItem("active_call_id", id);
-    router.push("/evaluation");
+    if (typeof window !== "undefined" && "BroadcastChannel" in window) {
+      try {
+        const channel = new BroadcastChannel("call_updates");
+        channel.postMessage({ type: "ACTIVE_CALL_CHANGED", callId: id });
+        channel.close();
+      } catch (e) {}
+    }
+    router.push(`/evaluation?id=${encodeURIComponent(id)}`);
   };
 
   // States

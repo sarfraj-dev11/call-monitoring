@@ -25,14 +25,19 @@ def transcribe_audio(file_path):
         speaker_turn = "Agent"
         
         for segment in segments:
+            text = segment.text.strip()
+            if not text:
+                continue
             start_time_str = format_timestamp(segment.start)
-            transcript_items.append({
-                "time": start_time_str,
-                "speaker": speaker_turn,
-                "text": segment.text.strip()
-            })
-            # Alternate turns on pause or speaker heuristic
-            speaker_turn = "Customer" if speaker_turn == "Agent" else "Agent"
+            if transcript_items and transcript_items[-1]["speaker"] == speaker_turn:
+                transcript_items[-1]["text"] += f" {text}"
+            else:
+                transcript_items.append({
+                    "time": start_time_str,
+                    "speaker": speaker_turn,
+                    "text": text
+                })
+                speaker_turn = "Customer" if speaker_turn == "Agent" else "Agent"
 
         result = {
             "agentName": "Rahul M.",

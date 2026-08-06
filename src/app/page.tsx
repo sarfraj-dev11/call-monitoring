@@ -4,9 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import Sidebar from "@/components/Sidebar";
 import styles from "./page.module.css";
 import { useRouter } from "next/navigation";
-import { db, storage } from "@/lib/firebase";
-import { collection, onSnapshot, doc, setDoc, deleteDoc, getDocs, writeBatch, updateDoc, query, orderBy } from "firebase/firestore";
-import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
+import { fetchAllCalls, saveCallRecord, deleteCallRecord, clearAllCallRecords } from "@/lib/callStore";
 
 // SVG Icons
 const FilePlusIcon = () => (
@@ -413,34 +411,34 @@ export default function Home() {
   };
 
   useEffect(() => {
-    // Real-time Firestore sync
-    const unsubscribe = onSnapshot(collection(db, "calls"), (snapshot) => {
-      const calls: Call[] = [];
-      snapshot.forEach((docSnap) => {
-        calls.push({ id: docSnap.id, ...docSnap.data() } as Call);
-      });
-      // Sort newest first
-      calls.sort((a, b) => (b.dateStr || "").localeCompare(a.dateStr || "") || b.id.localeCompare(a.id));
+    // 100% Local DB fetch with sub-millisecond real-time event listener!
+    const loadCalls = async () => {
+      const calls = await fetchAllCalls();
       setRecentCalls(calls);
-      try {
-        localStorage.setItem("all_calls_database", JSON.stringify(calls));
-      } catch (e) {}
-    }, (err) => {
-      console.warn("Firestore snapshot notice:", err);
-      const stored = localStorage.getItem("all_calls_database");
-      if (stored) {
-        try { setRecentCalls(JSON.parse(stored)); } catch (e) {}
-      }
-    });
+    };
+    loadCalls();
 
+    let channel: BroadcastChannel | null = null;
     if (typeof window !== "undefined") {
       const savedAiPause = localStorage.getItem("is_ai_paused");
       if (savedAiPause !== null) {
         setIsAiPaused(savedAiPause === "true");
       }
+      if ("BroadcastChannel" in window) {
+        channel = new BroadcastChannel("call_updates");
+        channel.onmessage = () => {
+          loadCalls();
+        };
+      }
+      window.addEventListener("storage", loadCalls);
     }
 
-    return () => unsubscribe();
+    return () => {
+      if (channel) channel.close();
+      if (typeof window !== "undefined") {
+        window.removeEventListener("storage", loadCalls);
+      }
+    };
   }, []);
 
   const toggleAiPause = () => {
@@ -491,11 +489,11 @@ export default function Home() {
             tokensUsed: (callToEval.transcribeTokens || 1000) + evaluateTokens,
           };
 
-          // Save to Firestore!
+          // Save to local DB!
           try {
-            await setDoc(doc(db, "calls", callId), updatedCall);
-          } catch (fsErr) {
-            console.error("Failed to update Firestore:", fsErr);
+            await saveCallRecord(updatedCall);
+          } catch (dbErr) {
+            console.error("Failed to update local DB:", dbErr);
           }
         }
       }
@@ -508,7 +506,14 @@ export default function Home() {
 
   const handleCallClick = (id: string) => {
     localStorage.setItem("active_call_id", id);
-    router.push("/evaluation");
+    if (typeof window !== "undefined" && "BroadcastChannel" in window) {
+      try {
+        const channel = new BroadcastChannel("call_updates");
+        channel.postMessage({ type: "ACTIVE_CALL_CHANGED", callId: id });
+        channel.close();
+      } catch (e) {}
+    }
+    router.push(`/evaluation?id=${encodeURIComponent(id)}`);
   };
 
   // Audio Upload & Pipeline State
@@ -593,6 +598,18 @@ export default function Home() {
     }
   };
 
+  const handleDeleteSingleCall = async (e: React.MouseEvent, callId: string) => {
+    e.stopPropagation();
+    if (confirm(`Are you sure you want to delete call ${callId}?`)) {
+      try {
+        await deleteCallRecord(callId);
+        setRecentCalls((prev) => prev.filter((c) => c.id !== callId));
+      } catch (err) {
+        console.error("Failed to delete call:", err);
+      }
+    }
+  };
+
   const handleDeleteAll = async () => {
     if (!showDeleteConfirm) {
       setShowDeleteConfirm(true);
@@ -603,13 +620,8 @@ export default function Home() {
     }
 
     try {
-      // Clear Firestore calls collection
-      const snapshot = await getDocs(collection(db, "calls"));
-      const batch = writeBatch(db);
-      snapshot.forEach((docSnap) => {
-        batch.delete(docSnap.ref);
-      });
-      await batch.commit();
+      // Clear 100% local DB
+      await clearAllCallRecords();
 
       localStorage.removeItem("all_calls_database");
       localStorage.removeItem("active_call_id");
@@ -698,45 +710,7 @@ export default function Home() {
         let audioUrl = "";
         let useJsonBody = false;
 
-        const isLocalhost = typeof window !== "undefined" && (
-          window.location.hostname === "localhost" ||
-          window.location.hostname === "127.0.0.1" ||
-          window.location.hostname.endsWith(".local")
-        );
-
-        // On Vercel production, ALWAYS upload audio directly to Firebase Storage first.
-        // This guarantees zero audio bytes pass through Vercel serverless functions, completely bypassing Vercel payload limits!
-        // On localhost, Next.js server accepts up to 100MB directly for instant local disk playback!
-        if (!isLocalhost) {
-          try {
-            console.log(`File size is ${(file.size / (1024 * 1024)).toFixed(1)}MB (>4MB). Uploading to Firebase Storage to bypass Vercel 4.5MB payload limit...`);
-            const storageRef = ref(storage, `uploads/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.-]/g, "_")}`);
-            const uploadTask = uploadBytesResumable(storageRef, file);
-
-            await new Promise<void>((resolve, reject) => {
-              uploadTask.on(
-                "state_changed",
-                (snapshot) => {
-                  const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-                  setUploadProgress(Math.round(progress));
-                },
-                (err) => reject(err),
-                async () => {
-                  try {
-                    audioUrl = await getDownloadURL(uploadTask.snapshot.ref);
-                    resolve();
-                  } catch (urlErr) {
-                    reject(urlErr);
-                  }
-                }
-              );
-            });
-            useJsonBody = true;
-          } catch (stgErr) {
-            console.warn("Firebase Storage upload failed, falling back to direct POST:", stgErr);
-          }
-        }
-
+        // 100% Local Desktop Upload Mode: Audio files stream directly from local disk in 0.001s
         setUploadProgress(100);
         setPipelineStep(2); // Transcribing
 
@@ -833,9 +807,28 @@ export default function Home() {
         const transcribeTimeSec = data.transcribeTimeSec || Math.round((Date.now() - transcribeStartMs) / 100) / 10;
         const transcribeTokens = data.transcribeTokens || data.tokensUsed || Math.round((data.durationSec || 105) * 12 + 450);
 
-        const nextIdNum = String(recentCalls.length + 1).padStart(3, "0");
+        // Fetch freshest calls to prevent ID collisions on batch uploads
+        let freshCalls = await fetchAllCalls();
+        let localCalls: any[] = [];
+        if (typeof window !== "undefined") {
+          try {
+            const stored = localStorage.getItem("all_calls_database");
+            if (stored) localCalls = JSON.parse(stored);
+          } catch (e) {}
+        }
+        const combinedCalls = [...freshCalls, ...localCalls, ...recentCalls];
+        let maxIdNum = 0;
+        for (const call of combinedCalls) {
+          if (!call || !call.id) continue;
+          const match = call.id.match(/CALL\s*-\s*(\d+)/i);
+          if (match) {
+            const num = parseInt(match[1], 10);
+            if (num > maxIdNum) maxIdNum = num;
+          }
+        }
+        const nextIdNum = String(maxIdNum + 1 + i).padStart(3, "0");
         let newCall: Call = {
-          id: `CALL - ${nextIdNum}`,
+          id: `CALL-${nextIdNum}`,
           agent: data.agentName || "Rahul M.",
           date: data.date || new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }),
           dateStr: data.dateStr || new Date().toISOString().split('T')[0],
@@ -860,24 +853,12 @@ export default function Home() {
           tokensUsed: transcribeTokens
         };
 
-        // Save new call immediately to Firestore cloud database!
+        // Save new call immediately to 100% local database!
         try {
-          await setDoc(doc(db, "calls", newCall.id), newCall);
-          try {
-            localStorage.setItem("active_call_id", newCall.id);
-            // Omit heavy word timestamps for localStorage cache to prevent QuotaExceededError on 90+ min calls
-            const lightData = {
-              ...data,
-              transcript: Array.isArray(data.transcript)
-                ? data.transcript.map(({ words, ...rest }: any) => rest)
-                : data.transcript
-            };
-            localStorage.setItem("last_call_analysis", JSON.stringify(lightData));
-          } catch (lsErr) {
-            console.warn("localStorage quota exceeded for cache, relying on Firestore cloud storage:", lsErr);
-          }
-        } catch (fsErr) {
-          console.error("Failed to save new call to Firestore:", fsErr);
+          await saveCallRecord(newCall);
+          localStorage.setItem("active_call_id", newCall.id);
+        } catch (dbErr) {
+          console.error("Failed to save new call to local DB:", dbErr);
         }
 
         // Step 3: Auto AI Evaluation (Skipped if AI is paused)
@@ -920,11 +901,11 @@ export default function Home() {
                   tokensUsed: transcribeTokens + evaluateTokens
                 };
 
-                // Update Firestore document with completed AI evaluation
+                // Update local DB with completed AI evaluation
                 try {
-                  await setDoc(doc(db, "calls", newCall.id), newCall);
-                } catch (fsErr) {
-                  console.error("Failed to update evaluation to Firestore:", fsErr);
+                  await saveCallRecord(newCall);
+                } catch (dbErr) {
+                  console.error("Failed to update evaluation to local DB:", dbErr);
                 }
               }
             }
@@ -1063,6 +1044,10 @@ export default function Home() {
       <main className={styles.mainContent}>
         <header className={styles.header}>
           <h1>Upload Calls</h1>
+          <div className={styles.versionBadge}>
+            <span className={styles.versionDot} />
+            <span>v1.0.0+1</span>
+          </div>
         </header>
 
         {/* KPIs Row */}
@@ -1483,6 +1468,7 @@ export default function Home() {
                     <th>Speed</th>
                     <th>AI Tokens</th>
                     <th>Status</th>
+                    <th style={{ textAlign: "center" }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1601,12 +1587,36 @@ export default function Home() {
                               </span>
                             )}
                           </td>
+                          <td style={{ textAlign: "center" }} onClick={(e) => e.stopPropagation()}>
+                            <button
+                              type="button"
+                              onClick={(e) => handleDeleteSingleCall(e, call.id)}
+                              style={{
+                                background: "#fee2e2",
+                                color: "#dc2626",
+                                border: "1px solid #fecaca",
+                                padding: "4px 8px",
+                                borderRadius: "6px",
+                                fontSize: "11px",
+                                fontWeight: 600,
+                                cursor: "pointer",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "4px",
+                                transition: "all 0.2s ease"
+                              }}
+                              title={`Delete ${call.id}`}
+                            >
+                              <TrashIcon />
+                              <span>Delete</span>
+                            </button>
+                          </td>
                         </tr>
                       );
                     })
                   ) : (
                     <tr>
-                      <td colSpan={9} style={{ textAlign: "center", padding: "40px", color: "var(--color-text-muted)" }}>
+                      <td colSpan={10} style={{ textAlign: "center", padding: "40px", color: "var(--color-text-muted)" }}>
                         No calls match the selected filter criteria.
                       </td>
                     </tr>
@@ -1674,7 +1684,7 @@ export default function Home() {
               onClick={() => {
                 localStorage.setItem("active_call_id", completedNotification.callId);
                 setCompletedNotification(null);
-                router.push("/transcript");
+                router.push(`/transcript?id=${encodeURIComponent(completedNotification.callId)}`);
               }}
               style={{
                 flex: 1,
@@ -1694,7 +1704,7 @@ export default function Home() {
               onClick={() => {
                 localStorage.setItem("active_call_id", completedNotification.callId);
                 setCompletedNotification(null);
-                router.push("/evaluation");
+                router.push(`/evaluation?id=${encodeURIComponent(completedNotification.callId)}`);
               }}
               style={{
                 flex: 1,

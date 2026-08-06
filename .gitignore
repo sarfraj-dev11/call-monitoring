@@ -42,3 +42,12 @@ next-env.d.ts
 
 .vercel
 .env*
+
+*.exe
+/dist
+/scratch
+/data
+/public/uploads/*.mp3
+/call-monitor
+src-tauri/target/
+

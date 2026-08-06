@@ -18,11 +18,47 @@
   gap: 32px;
 }
 
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
 .header h1 {
   font-family: var(--font-serif);
   font-size: 34px;
   font-weight: 400;
   color: var(--color-text-main);
+}
+
+.versionBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: var(--background-card);
+  border: 1px solid rgba(43, 40, 37, 0.12);
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  box-shadow: var(--shadow-sm);
+  letter-spacing: 0.3px;
+  transition: all var(--transition-fast);
+}
+
+.versionBadge:hover {
+  border-color: rgba(208, 90, 68, 0.3);
+  color: var(--color-text-main);
+  box-shadow: var(--shadow-hover);
+}
+
+.versionDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: var(--color-success);
+  box-shadow: 0 0 6px rgba(22, 163, 74, 0.4);
 }
 
 /* KPI Summary Styling */

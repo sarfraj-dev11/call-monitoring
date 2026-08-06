@@ -1,29 +1,109 @@
 {
   "name": "call-monitor",
-  "version": "0.1.0",
+  "version": "0.3.0",
+  "description": "Call Monitor AI Electron App",
+  "author": "Call Monitor AI",
   "private": true,
+  "main": "main.js",
   "scripts": {
     "dev": "next dev -H 0.0.0.0 -p 3000",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "electron:dev": "npx wait-on http://localhost:3000 --timeout 1000 && npx electron . || npx concurrently \"npm run dev\" \"npx wait-on http://localhost:3000 --timeout 20000 && npx electron .\"",
+    "electron:build": "next build && electron-builder",
+    "electron:build:fast": "next build && electron-builder --win -c.compression=store",
+    "electron:build:zip": "next build && electron-builder --win zip",
+    "electron:dev:zip": "next build && electron-builder --win zip portable",
+    "electron:zip": "next build && electron-builder --win zip portable",
+    "tauri": "npx @tauri-apps/cli",
+    "tauri:dev": "npx wait-on http://localhost:3000 --timeout 1000 && npx @tauri-apps/cli dev || concurrently \"npm run dev\" \"npx wait-on http://localhost:3000 --timeout 20000 && npx @tauri-apps/cli dev\"",
+    "tauri:build": "npx @tauri-apps/cli build"
+  },
+  "build": {
+    "appId": "com.callmonitor.ai",
+    "productName": "Call Monitor AI",
+    "compression": "store",
+    "forceCodeSigning": false,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "data/**/*",
+      ".next/**/*",
+      "!.next/cache/**/*",
+      "!.next/lock",
+      "!.next/trace",
+      "public/**/*",
+      "transcribe_whisper.py",
+      "download_model.py",
+      ".env.local",
+      "package.json",
+      "!**/*.map",
+      "!**/*.tsbuildinfo"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "sign": null
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Call Monitor AI",
+      "uninstallDisplayName": "Call Monitor AI",
+      "differentialPackage": false
+    },
+    "asar": true,
+    "asarUnpack": [
+      "transcribe_whisper.py",
+      "download_model.py",
+      "data/**/*"
+    ]
   },
   "dependencies": {
-    "firebase": "^12.17.0",
+    "@tauri-apps/api": "^2.3.0",
     "lucide-react": "^1.21.0",
     "music-metadata": "^11.13.0",
     "next": "16.2.9",
-    "puppeteer": "^25.4.0",
+    "peaks.js": "^4.0.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "wavesurfer.js": "^7.12.11"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.3.0",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "concurrently": "^9.1.2",
+    "electron": "^35.0.0",
+    "electron-builder": "^25.1.8",
     "eslint": "^9",
     "eslint-config-next": "16.2.9",
-    "typescript": "^5"
+    "typescript": "^5",
+    "wait-on": "^8.0.2"
   }
 }

@@ -121,8 +121,7 @@ export async function DELETE(request: Request) {
     try {
       const files = await fs.readdir(uploadsDir);
       for (const file of files) {
-        // Only delete file extensions we created
-        if (file.endsWith(".wav") || file.endsWith(".mp3")) {
+        if (file !== ".gitkeep") {
           await fs.unlink(path.join(uploadsDir, file)).catch(e => console.error(`Failed to unlink ${file}:`, e));
         }
       }

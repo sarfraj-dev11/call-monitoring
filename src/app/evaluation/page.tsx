@@ -1,10 +1,10 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, Suspense } from "react";
 import Sidebar from "@/components/Sidebar";
 import styles from "./page.module.css";
-import { db } from "@/lib/firebase";
-import { collection, onSnapshot, doc, updateDoc } from "firebase/firestore";
+import { useRouter, useSearchParams } from "next/navigation";
+import { fetchCallById, saveCallRecord } from "@/lib/callStore";
 
 // SVG Icons
 const SuccessIcon = () => (
@@ -236,7 +236,11 @@ const generateFallbackQaAnalysis = (call: any) => {
   };
 };
 
-export default function EvaluationPage() {
+function EvaluationContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const urlId = searchParams ? searchParams.get("id") : null;
+
   const [qaScore, setQaScore] = useState(0);
   const [callId, setCallId] = useState("");
   const [scores, setScores] = useState<any[]>([]);
@@ -261,6 +265,103 @@ export default function EvaluationPage() {
   // Continuous AI Learning Feedback State
   const [managerFeedbackNote, setManagerFeedbackNote] = useState("");
   const [feedbackSavedMsg, setFeedbackSavedMsg] = useState("");
+
+  const loadCallData = (selectedId?: string) => {
+    if (typeof window === "undefined") return;
+    const storedDb = localStorage.getItem("all_calls_database");
+    if (storedDb) {
+      try {
+        const db = JSON.parse(storedDb);
+        setAllCalls(db);
+        
+        const activeId = selectedId || urlId || localStorage.getItem("active_call_id") || (db[0]?.id || "");
+        setActiveCallId(activeId);
+        
+        const activeCall = db.find((c: any) => c.id === activeId);
+        
+        if (activeCall) {
+          setHasData(true);
+          setCallId(activeCall.id);
+          
+          if (activeCall.evaluation) {
+            setHasEvaluation(true);
+            const evalData = activeCall.evaluation;
+            setQaScore(evalData.qaScore || 0);
+            setScores(evalData.scores || []);
+            setBreakdown(evalData.breakdown || []);
+            setFeedback(evalData.feedback || []);
+            setGuidance(evalData.guidance || []);
+            
+            const qaData = activeCall.qaAnalysis || generateFallbackQaAnalysis(activeCall);
+            setQaAnalysis(qaData);
+          } else {
+            setHasEvaluation(false);
+            setQaScore(0);
+            setScores([]);
+            setBreakdown([]);
+            setFeedback([]);
+            setGuidance([]);
+            setQaAnalysis(null);
+          }
+          
+          localStorage.setItem("active_call_id", activeCall.id);
+        } else {
+          setHasData(false);
+          setHasEvaluation(false);
+        }
+      } catch (e) {
+        console.error("Failed to parse database", e);
+        setHasData(false);
+        setHasEvaluation(false);
+      }
+    } else {
+      setHasData(false);
+      setHasEvaluation(false);
+    }
+  };
+
+  useEffect(() => {
+    loadCallData();
+
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === "active_call_id" && e.newValue) {
+        loadCallData(e.newValue);
+      }
+    };
+
+    let channel: BroadcastChannel | null = null;
+    if (typeof window !== "undefined" && "BroadcastChannel" in window) {
+      try {
+        channel = new BroadcastChannel("call_updates");
+        channel.onmessage = (msg) => {
+          if (msg.data?.type === "ACTIVE_CALL_CHANGED" && msg.data.callId) {
+            loadCallData(msg.data.callId);
+          } else {
+            loadCallData();
+          }
+        };
+      } catch (e) {}
+    }
+
+    window.addEventListener("storage", handleStorage);
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+      if (channel) channel.close();
+    };
+  }, [urlId]);
+
+  const handleCallSelect = (id: string) => {
+    if (!id) return;
+    loadCallData(id);
+    router.push(`/evaluation?id=${encodeURIComponent(id)}`);
+    if (typeof window !== "undefined" && "BroadcastChannel" in window) {
+      try {
+        const channel = new BroadcastChannel("call_updates");
+        channel.postMessage({ type: "ACTIVE_CALL_CHANGED", callId: id });
+        channel.close();
+      } catch (e) {}
+    }
+  };
 
   const handleSaveFeedback = (e: React.FormEvent) => {
     e.preventDefault();
@@ -348,59 +449,6 @@ export default function EvaluationPage() {
     }
   };
 
-  const loadCallData = (selectedId?: string) => {
-    const storedDb = localStorage.getItem("all_calls_database");
-    if (storedDb) {
-      try {
-        const db = JSON.parse(storedDb);
-        setAllCalls(db);
-        
-        const activeId = selectedId || localStorage.getItem("active_call_id") || (db[0]?.id || "");
-        setActiveCallId(activeId);
-        
-        const activeCall = db.find((c: any) => c.id === activeId);
-        
-        if (activeCall) {
-          setHasData(true);
-          setCallId(activeCall.id);
-          
-          if (activeCall.evaluation) {
-            setHasEvaluation(true);
-            const evalData = activeCall.evaluation;
-            setQaScore(evalData.qaScore || 0);
-            setScores(evalData.scores || []);
-            setBreakdown(evalData.breakdown || []);
-            setFeedback(evalData.feedback || []);
-            setGuidance(evalData.guidance || []);
-            
-            const qaData = activeCall.qaAnalysis || generateFallbackQaAnalysis(activeCall);
-            setQaAnalysis(qaData);
-          } else {
-            setHasEvaluation(false);
-            setQaScore(0);
-            setScores([]);
-            setBreakdown([]);
-            setFeedback([]);
-            setGuidance([]);
-            setQaAnalysis(null);
-          }
-          
-          localStorage.setItem("active_call_id", activeCall.id);
-        } else {
-          setHasData(false);
-          setHasEvaluation(false);
-        }
-      } catch (e) {
-        console.error("Failed to parse database", e);
-        setHasData(false);
-        setHasEvaluation(false);
-      }
-    } else {
-      setHasData(false);
-      setHasEvaluation(false);
-    }
-  };
-
   const runAiEvaluation = async () => {
     const storedDb = localStorage.getItem("all_calls_database");
     if (!storedDb || !activeCallId) return;
@@ -444,8 +492,9 @@ export default function EvaluationPage() {
           qaAnalysis: evalData.qaAnalysis || null
         };
 
-        // Save to Firestore!
-        await updateDoc(doc(db, "calls", activeCallId), updatedCall);
+        // Save to 100% Local DB!
+        await saveCallRecord(updatedCall);
+        loadCallData(activeCallId);
       }
     } catch (e: any) {
       console.error(e);
@@ -453,10 +502,6 @@ export default function EvaluationPage() {
     } finally {
       setIsEvaluating(false);
     }
-  };
-
-  const handleCallSelect = (id: string) => {
-    loadCallData(id);
   };
 
   const getQaStatusText = (score: number) => {
@@ -1076,5 +1121,13 @@ export default function EvaluationPage() {
         )}
       </main>
     </div>
+  );
+}
+
+export default function EvaluationPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: "40px", color: "#64748b", fontFamily: "sans-serif" }}>Loading Evaluation...</div>}>
+      <EvaluationContent />
+    </Suspense>
   );
 }

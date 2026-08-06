@@ -314,3 +314,38 @@ export function findBestMatchingAgentName(text: string): string {
 
   return bestName;
 }
+
+/**
+ * Detects the official Agent name directly spoken in the transcript dialogue.
+ */
+export function detectAgentNameFromTranscript(transcript: any[], fallbackAgent?: string): string {
+  if (!transcript || !Array.isArray(transcript)) return fallbackAgent || "Unknown Agent";
+
+  // First check Agent speaker turns
+  for (const turn of transcript) {
+    if (turn.speaker === "Agent" && turn.text) {
+      const text = turn.text;
+      for (const name of OFFICIAL_PSEUDO_NAMES) {
+        const regex = new RegExp(`\\b${name.replace(/\s+/g, "\\s+")}\\b`, "i");
+        if (regex.test(text)) {
+          return name;
+        }
+      }
+    }
+  }
+
+  // Secondary check across all turns if not found in Agent turns
+  for (const turn of transcript) {
+    if (turn.text) {
+      const text = turn.text;
+      for (const name of OFFICIAL_PSEUDO_NAMES) {
+        const regex = new RegExp(`\\b${name.replace(/\s+/g, "\\s+")}\\b`, "i");
+        if (regex.test(text)) {
+          return name;
+        }
+      }
+    }
+  }
+
+  return fallbackAgent || "Unknown Agent";
+}
